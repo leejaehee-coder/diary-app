@@ -7,8 +7,8 @@
   "theme_color": "#f4f2ff",
   "icons": [
     {
-      "src": "/diary-app/icon-color.png",
-      "sizes": "192x192",
+      "src": "/diary-app/icon-512.png",
+      "sizes": "512x512",
       "type": "image/png"
     },
     {
