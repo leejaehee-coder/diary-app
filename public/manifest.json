@@ -1,10 +1,11 @@
 {
-  "name": "Diary App",
-  "short_name": "Diary",
+  "name": "Daily Ink",
+  "short_name": "Daily Ink",
   "start_url": "/diary-app/",
+  "scope": "/diary-app/",
   "display": "standalone",
-  "background_color": "#f4f2ff",
-  "theme_color": "#f4f2ff",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "icons": [
     {
       "src": "/diary-app/icon-192.png",
