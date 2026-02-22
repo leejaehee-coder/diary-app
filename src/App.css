@@ -1,3 +1,6 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap');
+
 :root{
   --bg1:#f9e2f0;
   --bg2:#d0f0f0;
@@ -311,9 +314,32 @@ textarea{
   padding: 0 6px;
 }
 .entriesTitle{
+  .todayHeader{
+  font-family: "Nunito", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
   font-weight: 700;
   color: var(--accent);
   margin: 12px 0 10px;
+}
+.entriesTitleChalk{
+  font-family: "Patrick Hand", cursive;
+
+  font-size: 1.9rem;
+  color:#f7b7d0;
+
+  letter-spacing:1px;
+
+  /* chalk 느낌 핵심 */
+  text-shadow:
+    0 0 1px rgba(255,255,255,.9),
+    0 0 3px rgba(244,166,194,.7),
+    1px 1px 0 rgba(255,255,255,.25),
+    -1px -1px 0 rgba(244,166,194,.35);
+
+  /* 살짝 거친 분필 질감 */
+  opacity:.96;
 }
 .entries{
   display: grid;
@@ -440,3 +466,13 @@ textarea{
   margin-top: 10px;
   font-weight: 800;
 }
+/* ✅ 일기 카드 삭제 버튼: 우상단 고정 */
+.entryCard { 
+  position: relative;
+}
+.entryCard button {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+}
+.historyTotal { margin-left: 8px; }
