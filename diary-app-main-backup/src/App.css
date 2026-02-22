@@ -1,0 +1,116 @@
+/* 기본 색상과 배경 설정 */
+:root {
+  --bg: #f6f2ff;
+  --card: rgba(255, 255, 255, .78);
+  --border: rgba(50, 20, 90, .12);
+  --text: #2b2b2b;
+  --mint: #d0f0f0;
+  --pink: #f9e2f0;
+  --lavender: #8a4d89;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Great Vibes', cursive, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: var(--text);
+  background: linear-gradient(180deg, #f9e2f0 0%, #d0f0f0 100%);
+}
+
+/* 중앙에 일기 및 TODO 배치 */
+.wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 18px 14px 40px;
+  display: flex;
+  justify-content: space-between; /* 좌우에 배치 */
+}
+
+/* 1. 일기 입력 영역 왼쪽 */
+.diary-section {
+  width: 48%;
+  margin-right: 20px;
+}
+
+textarea {
+  min-height: 200px;
+  resize: vertical;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, .88);
+  line-height: 1.45;
+}
+
+/* 2. TODO 리스트 오른쪽 */
+.todo-section {
+  width: 48%;
+  background: var(--card);
+  padding: 12px;
+  border-radius: 16px;
+  margin-top: 20px;
+}
+
+.todo-section h2 {
+  font-size: 1.5rem;
+  margin-bottom: 10px;
+}
+
+.todo-section input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1.2rem;
+}
+
+.todo-item input[type="checkbox"] {
+  margin-right: 10px;
+}
+
+.todo-item.completed {
+  text-decoration: line-through;
+  color: #d44a8e; /* 진한 핑크색 */
+  font-style: italic; /* 분필 느낌 */
+}
+
+.todo-item button {
+  background: none;
+  border: none;
+  color: #ff4d4d;
+  cursor: pointer;
+}
+
+.todo-item button:hover {
+  color: #ff1a1a;
+}
+
+/* 저장 버튼 스타일 */
+button {
+  margin-top: 10px;
+  height: 40px;
+  width: 120px; /* 작은 버튼 크기 */
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--mint); /* 민트 색상 */
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+  position: absolute;
+  bottom: 10px;
+  right: 14px; /* 오른쪽 구석에 배치 */
+}
