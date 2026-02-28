@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
 
-import { auth, googleProvider, db } from "./firebase";
+import { auth, googleProvider, db, storage } from "./firebase";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import {
   collection,
@@ -14,6 +14,7 @@ import {
   deleteDoc,
   serverTimestamp, // ✅ 추가
 } from "firebase/firestore";
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -21,6 +22,8 @@ function App() {
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [text, setText] = useState("");
+  const [entryPhotoFile, setEntryPhotoFile] = useState(null);
+  const entryPhotoInputRef = useRef(null);
 
   const [entries, setEntries] = useState([]);
 
@@ -30,6 +33,19 @@ function App() {
 
   // ✅ 보기 모드: all | diary | todo
   const [viewMode, setViewMode] = useState("all");
+  // ✅ (추가) Entry 검색 (D 상세화면에서만 사용)
+const [entrySearch, setEntrySearch] = useState("");
+const [entrySearchApplied, setEntrySearchApplied] = useState("");
+
+// ✅ (추가) 검색 적용/해제
+const applyEntrySearch = () => {
+  setEntrySearchApplied((entrySearch || "").trim());
+};
+
+const clearEntrySearch = () => {
+  setEntrySearch("");
+  setEntrySearchApplied("");
+};
 
   // ✅ TODO 섹션 내부 모드: todo | shopping
   const [todoMode, setTodoMode] = useState("todo");
@@ -112,22 +128,39 @@ function App() {
     await deleteDoc(ref);
   };
 
-  // 일기 저장
+    // 일기 저장 (+ 사진 1장 업로드)
   const save = async () => {
     if (!user) return;
     const t = (text || "").trim();
     if (!t) return;
 
+    let imageUrl = "";
+    let imagePath = "";
+
+    // ✅ 사진이 있으면 Storage 업로드
+    if (entryPhotoFile) {
+      const ext = (entryPhotoFile.name || "").split(".").pop() || "jpg";
+      imagePath = `users/${user.uid}/entries/${Date.now()}.${ext}`;
+
+      const sRef = storageRef(storage, imagePath);
+      await uploadBytes(sRef, entryPhotoFile);
+      imageUrl = await getDownloadURL(sRef);
+    }
+
     const ref = collection(db, "users", user.uid, "entries");
     await addDoc(ref, {
       text: t,
       completed: false,
-      date, // ✅ 오늘 날짜 기준(YYYY-MM-DD)
-      time: new Date().toTimeString().slice(0, 5), // ✅ (추가) 오늘 시간 저장 → undefined 해결
-      createdAt: serverTimestamp(), // ✅ 정렬 안정
+      date,
+      time: new Date().toTimeString().slice(0, 5),
+      createdAt: serverTimestamp(),
+      imageUrl,
+      imagePath,
     });
 
     setText("");
+    setEntryPhotoFile(null);
+    if (entryPhotoInputRef.current) entryPhotoInputRef.current.value = "";
   };
 
   // Todo 추가
@@ -270,11 +303,29 @@ function App() {
             </div>
 
             <textarea value={text} onChange={(e) => setText(e.target.value)} />
+                          
 
-            <div className="saveRow">
-              <button className="save-button" onClick={save}>
+                        <div className="saveRow">
+              <button
+                type="button"
+                className="save-button photoBtn"
+                onClick={() => entryPhotoInputRef.current?.click()}
+              >
+                포토
+              </button>
+
+              <button type="button" className="save-button" onClick={save}>
                 저장
               </button>
+
+              {/* ✅ 숨김 파일 input: 포토 버튼이 이걸 클릭함 */}
+              <input
+                ref={entryPhotoInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(e) => setEntryPhotoFile(e.target.files?.[0] || null)}
+              />
             </div>
           </div>
         )}
@@ -466,34 +517,56 @@ function App() {
     })}
   </div>
 ) : (
-  <div className="entriesTitle todayHeader">
-    {new Date().toLocaleDateString("ko-KR", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    })}
+  <div className="entriesTitle todayHeader headerWithSearch">
+    <div className="headerLeft">
+      {new Date().toLocaleDateString("ko-KR", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })}
+    </div>
+
+        {viewMode === "diary" && (
+      <div className="headerRight">
+        <input
+          type="text"
+          placeholder="키워드 검색"
+          value={entrySearch}
+          onChange={(e) => setEntrySearch(e.target.value)}
+          className="entrySearchInput"
+        />
+
+        <button
+  type="button"
+  className="save-button header-search-btn"
+  onClick={applyEntrySearch}
+>
+  검색
+</button>
+      </div>
+    )}
   </div>
 )}
 
             <div className="entries">
-              {(viewMode === "all"
-                ? entries.filter((e) => (e.date || "") === todayKey)
+                            {(viewMode === "all"
+                ? entries.filter((en) => (en.date || "") === todayKey)
+                : viewMode === "diary" && entrySearchApplied
+                ? entries.filter((en) =>
+                    String(en?.text || "")
+                      .toLowerCase()
+                      .includes(String(entrySearchApplied).toLowerCase())
+                  )
                 : entries
-              ).map((e) => (
-                <div className="entryCard" key={e.id}>
-                  <div className="entryDateLine">
-  {viewMode === "all"
-    ? (e.time || (e.createdAt?.toDate?.() ? e.createdAt.toDate().toTimeString().slice(0, 5) : ""))
-    : `${e.date || ""} ${e.time || (e.createdAt?.toDate?.() ? e.createdAt.toDate().toTimeString().slice(0, 5) : "")}`.trim()}
-</div>
-
-                  <div className="entryBody">{e.text}</div>
-
-                  {/* ✅ (추가) 상세(일기) 화면에서 삭제 버튼 */}
-                  {viewMode !== "all" && (
-                    <button onClick={() => deleteEntry(e.id)}>삭제</button>
-                  )}
-                </div>
+              ).map((en) => (
+                <EntryCard
+  key={en.id}
+  entry={en}
+  viewMode={viewMode}
+  onDelete={deleteEntry}
+  user={user}
+  entrySearchApplied={entrySearchApplied}
+/>
               ))}
             </div>
           </div>
@@ -504,7 +577,266 @@ function App() {
     </div>
   );
 }
+function EntryCard({ entry, viewMode, onDelete, user, entrySearchApplied }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(entry?.text || "");
+  const [photoOpen, setPhotoOpen] = useState(false);
 
+  // ✅ (추가) 수정 모드 사진 교체/제거 (수정 모드에서만)
+  const [editPhotoFile, setEditPhotoFile] = useState(null);
+  const editPhotoInputRef = useRef(null);
+  const [removePhoto, setRemovePhoto] = useState(false);
+
+  useEffect(() => {
+    setDraft(entry?.text || "");
+  }, [entry?.text]);
+
+  // ✅ 핑크 분필 하이라이트
+  const highlightText = (text, keyword) => {
+    if (!keyword) return text;
+    const k = String(keyword);
+    const parts = String(text).split(new RegExp(`(${k})`, "gi"));
+    return parts.map((part, i) =>
+      part.toLowerCase() === k.toLowerCase() ? (
+        <span key={i} className="chalkHighlight">
+          {part}
+        </span>
+      ) : (
+        part
+      )
+    );
+  };
+
+  const timeText =
+    viewMode === "all"
+      ? (entry?.time ||
+          (entry?.createdAt?.toDate?.()
+            ? entry.createdAt.toDate().toTimeString().slice(0, 5)
+            : ""))
+      : `${entry?.date || ""} ${
+          entry?.time ||
+          (entry?.createdAt?.toDate?.()
+            ? entry.createdAt.toDate().toTimeString().slice(0, 5)
+            : "")
+        }`.trim();
+
+  const startEdit = () => {
+    setIsEditing(true);
+    setDraft(entry?.text || "");
+    setEditPhotoFile(null);
+    setRemovePhoto(false);
+    if (editPhotoInputRef.current) editPhotoInputRef.current.value = "";
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setDraft(entry?.text || "");
+    setEditPhotoFile(null);
+    setRemovePhoto(false);
+    if (editPhotoInputRef.current) editPhotoInputRef.current.value = "";
+  };
+
+  const saveEdit = async () => {
+    if (!user) return;
+
+    const t = String(draft || "").trim();
+    if (!t) return;
+
+    let imageUrl = entry?.imageUrl || "";
+    let imagePath = entry?.imagePath || "";
+
+    // ✅ 1) 사진 제거 선택
+    if (removePhoto) {
+      if (imagePath) {
+        try {
+          await deleteObject(storageRef(storage, imagePath));
+        } catch (e) {
+          // 파일이 이미 없을 수도 있으니 조용히 무시
+          console.warn("deleteObject(remove) fail:", e);
+        }
+      }
+      imageUrl = "";
+      imagePath = "";
+    }
+
+    // ✅ 2) 새 사진으로 교체
+    if (editPhotoFile) {
+      // 기존 사진 있으면 먼저 삭제(깔끔)
+      if (imagePath) {
+        try {
+          await deleteObject(storageRef(storage, imagePath));
+        } catch (e) {
+          console.warn("deleteObject(replace) fail:", e);
+        }
+      }
+
+      const ext = (editPhotoFile.name || "").split(".").pop() || "jpg";
+      imagePath = `users/${user.uid}/entries/${entry.id}_${Date.now()}.${ext}`;
+
+      const sRef = storageRef(storage, imagePath);
+      await uploadBytes(sRef, editPhotoFile);
+      imageUrl = await getDownloadURL(sRef);
+    }
+
+    const ref = doc(db, "users", user.uid, "entries", entry.id);
+    await updateDoc(ref, {
+      text: t,
+      imageUrl,
+      imagePath,
+    });
+
+    setIsEditing(false);
+    setEditPhotoFile(null);
+    setRemovePhoto(false);
+    if (editPhotoInputRef.current) editPhotoInputRef.current.value = "";
+  };
+
+  return (
+    <div className="entryCard">
+      {/* 우상단 액션 */}
+      <div className="entryActions">
+        {!isEditing ? (
+          <>
+            <button
+              type="button"
+              className="entryActionBtn edit"
+              onClick={startEdit}
+              title="수정"
+              aria-label="수정"
+            >
+              ✎
+            </button>
+            <button
+              type="button"
+              className="entryActionBtn delete"
+              onClick={() => onDelete?.(entry.id)}
+              title="삭제"
+              aria-label="삭제"
+            >
+              ×
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="entryActionBtn edit"
+              onClick={saveEdit}
+              title="저장"
+              aria-label="저장"
+            >
+              ✓
+            </button>
+            <button
+              type="button"
+              className="entryActionBtn delete"
+              onClick={cancelEdit}
+              title="취소"
+              aria-label="취소"
+            >
+              ×
+            </button>
+          </>
+        )}
+      </div>
+
+      <div className="entryDateLine">{timeText}</div>
+
+      {/* 사진 보기(기존 기능 유지) */}
+      {!isEditing && entry?.imageUrl && (
+        <div style={{ marginTop: "8px" }}>
+          <button
+            type="button"
+            className="entryMiniBtn"
+            onClick={() => setPhotoOpen(true)}
+          >
+            사진 보기
+          </button>
+        </div>
+      )}
+
+      {photoOpen && (
+        <div
+          onClick={() => setPhotoOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: "18px",
+          }}
+        >
+          <img
+            src={entry.imageUrl}
+            alt="entry"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: "95vw",
+              maxHeight: "85vh",
+              borderRadius: "14px",
+              boxShadow: "0 10px 30px rgba(0,0,0,.35)",
+              background: "#fff",
+            }}
+          />
+        </div>
+      )}
+
+      {/* 본문 */}
+      {!isEditing ? (
+        <div className="entryBody">
+          {viewMode === "diary" && entrySearchApplied
+            ? highlightText(entry?.text || "", entrySearchApplied)
+            : entry?.text}
+        </div>
+      ) : (
+        <>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            style={{ marginTop: "10px" }}
+          />
+
+          {/* ✅ 수정 모드에서만: 사진 교체/제거 */}
+          <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+            <button
+              type="button"
+              className="save-button photoBtn"
+              onClick={() => editPhotoInputRef.current?.click()}
+            >
+              포토
+            </button>
+
+            <button
+              type="button"
+              className="save-button photoRemoveBtn"
+              onClick={() => {
+                setRemovePhoto(true);
+                setEditPhotoFile(null);
+                if (editPhotoInputRef.current) editPhotoInputRef.current.value = "";
+              }}
+            >
+              사진 제거
+            </button>
+
+            <input
+              ref={editPhotoInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                setEditPhotoFile(e.target.files?.[0] || null);
+                setRemovePhoto(false);
+              }}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 function HistoryPanel({
   mode,
   dates,
