@@ -313,45 +313,117 @@ textarea{
   margin-top: 18px;
   padding: 0 6px;
 }
-.entriesTitle{
-  .todayHeader{
+
+/* 오늘 헤더 폰트(원래 의도 유지, 문법 오류만 제거) */
+.todayHeader{
   font-family: "Nunito", sans-serif;
   font-weight: 700;
   letter-spacing: 0.5px;
 }
+
+.entriesTitle{
   font-weight: 700;
   color: var(--accent);
   margin: 12px 0 10px;
 }
+
 .entriesTitleChalk{
   font-family: "Patrick Hand", cursive;
-
   font-size: 1.9rem;
   color:#f7b7d0;
-
   letter-spacing:1px;
-
-  /* chalk 느낌 핵심 */
   text-shadow:
     0 0 1px rgba(255,255,255,.9),
     0 0 3px rgba(244,166,194,.7),
     1px 1px 0 rgba(255,255,255,.25),
     -1px -1px 0 rgba(244,166,194,.35);
-
-  /* 살짝 거친 분필 질감 */
   opacity:.96;
 }
+
 .entries{
   display: grid;
   gap: 12px;
 }
+
 .entryCard{
   border: 1px solid rgba(244,166,194,.65);
   background: rgba(255,255,255,.96);
   border-radius: 14px;
   box-shadow: var(--shadow);
-  padding: 12px 14px;
+  padding: 12px 14px; /* ✅ 위로 올리기 위해 padding-top 확장 제거 */
+  position: relative; /* 유지 */
 }
+
+/* ✅ 상단 한 줄: 시간 + 액션 버튼 */
+.entryTopLine{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px; /* 기존 entryDateLine 느낌 */
+}
+
+/* 시간 텍스트(기존 entryDateLine 톤 유지) */
+.entryTimeText{
+  color: var(--muted);
+  font-size: .92rem;
+  display:flex;
+  align-items:center;
+  line-height: 1;
+}
+
+/* 버튼들 오른쪽 정렬 */
+.entryTopActions{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ✅ 기존 .entryActionBtn은 유지하되, entryTopLine 안에서는 absolute 무력화 */
+.entryTopLine .entryActionBtn{
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  transform: none !important;
+}
+
+/* 동그라미 버튼(기존 그대로) */
+.entryActionBtn{
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0,0,0,.10);
+  background: rgba(255,255,255,.9);
+  cursor: pointer;
+  line-height: 1;
+  font-size: 16px;
+  padding: 0;
+}
+
+/* 사진 버튼만 연노랑 */
+.entryActionBtn.photo{
+  background: #fff1b8;
+}
+
+.entryActionBtn.edit{
+  background: rgba(159,227,213,.22);
+}
+.entryActionBtn.edit:hover{
+  background: rgba(159,227,213,.32);
+}
+
+.entryActionBtn.delete{
+  background: rgba(244,166,194,.22);
+}
+.entryActionBtn.delete:hover{
+  background: rgba(244,166,194,.32);
+}
+
+/* 기존 entryDateLine/entryBody는 그대로 유지 (본문 UI 변경 없음) */
 .entryDateLine{
   display:flex;
   align-items:center;
@@ -360,7 +432,9 @@ textarea{
   color: var(--muted);
   font-size: .92rem;
   margin-bottom: 8px;
+  margin-top: 0; /* 위로 끌어올리기 */
 }
+
 .entryBody{
   white-space: pre-wrap;
   line-height: 1.5;
@@ -383,6 +457,7 @@ textarea{
   .content{ grid-template-columns: 1fr; }
   .belowGrid{ grid-template-columns: 1fr; }
 }
+
 /* =========================
    ✅ HistoryPanel (todo-section 안에서만)
    ========================= */
@@ -466,10 +541,6 @@ textarea{
   margin-top: 10px;
   font-weight: 800;
 }
-/* ✅ 일기 카드 삭제 버튼: 우상단 고정 */
-.entryCard { 
-  position: relative;
-}
 
 .historyTotal { margin-left: 8px; }
 
@@ -497,7 +568,7 @@ textarea{
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px; /* entryCard와 동일: 저장버튼 수직라인 맞춤 */
+  padding: 12px 14px;
 }
 
 .entriesTitle.todayHeader.headerWithSearch .headerRight{
@@ -506,7 +577,7 @@ textarea{
   gap: 10px;
 }
 
-/* 검색 input 검은 테두리 제거 (너무 튀지 않게) */
+/* 검색 input */
 .entrySearchInput{
   width: 170px;
   max-width: 38vw;
@@ -521,112 +592,15 @@ textarea{
   background: #dff7f2;
   color: inherit;
 }
-
 .saveBtn.mint:hover{
   background: #c8efe7;
 }
-/* =========================
-   ✅ EntryCard 우상단 액션(수정/삭제)
-   - 기존 저장 버튼(.save-button) 영향 없음
-   ========================= */
 
-.entryCard{
-  position: relative; /* 유지 */
-}
-
-/* 우상단 버튼 컨테이너 */
-.entryActions{
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  display: flex;
-  gap: 8px;
-  z-index: 2;
-}
-
-/* 동그라미 버튼 */
-.entryActionBtn{
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(0,0,0,.10);
-  background: rgba(255,255,255,.9);
-  cursor: pointer;
-  line-height: 1;
-  font-size: 16px;
-  padding: 0;
-}
-
-/* 수정/삭제 톤만 살짝 구분(레이아웃 변화 없음) */
-.entryActionBtn.edit{
-  background: rgba(159,227,213,.22);
-}
-.entryActionBtn.edit:hover{
-  background: rgba(159,227,213,.32);
-}
-
-.entryActionBtn.delete{
-  background: rgba(244,166,194,.22);
-}
-.entryActionBtn.delete:hover{
-  background: rgba(244,166,194,.32);
-}
-
-/* 수정 모드 UI(카드 안에서만, add-only) */
-.entryEditBox{
-  margin-top: 10px;
-}
-
-.entryEditTextarea{
-  width: 100%;
-  box-sizing: border-box;
-  min-height: 120px;
-  resize: vertical;
-  padding: 12px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(0,0,0,.12);
-  background: rgba(255,255,255,.92);
-  font-size: 1rem;
-  line-height: 1.5;
-}
-
-.entryEditRow{
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.entryMiniBtn{
-  padding: 8px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(0,0,0,.08);
-  background: rgba(138,77,137,.10);
-  cursor: pointer;
-}
-/* ✅ EntryCard 우상단 액션 버튼과 내용 간격 확보 */
-.entryCard{
-  padding-top: 44px; /* 버튼 영역만큼 위 여백 확보 */
-}
-
-.entryActions{
-  top: 12px;
-  right: 12px;
-}
-
-/* 시간줄이 버튼이랑 더 안 붙게 */
-.entryDateLine{
-  margin-top: 2px;
-}
 /* ✅ 검색 키워드 분필 핑크 강조 */
 .chalkHighlight{
   position: relative;
   display: inline-block;
 }
-
 .chalkHighlight::after{
   content: "";
   position: absolute;
@@ -639,17 +613,13 @@ textarea{
   border-radius: 4px;
   pointer-events: none;
 }
-/* =========================
-   ✅ D 헤더 검색 input = 버튼과 완전 동일 높이
-   ========================= */
 
+/* ✅ D 헤더 검색 input = 버튼과 동일 높이 */
 .entriesTitle.todayHeader.headerWithSearch .entrySearchInput{
   width: 280px;
   max-width: 55vw;
-
-  padding: 12px 14px;   /* ← 세로 여유 증가 */
+  padding: 12px 14px;
   font-size: 14px;
-
   border-radius: 10px;
   border: 1px solid rgba(0,0,0,.08);
   background: #fff;
@@ -662,8 +632,131 @@ textarea{
   color: var(--text);
   border: 1px solid rgba(0,0,0,.08);
 }
-
 .entriesTitle.todayHeader.headerWithSearch .save-button:hover{
   background-color: #c8efe7;
   color: var(--text);
+}
+/* ✅ 저장줄 버튼 간격 */
+.saveRow{
+  gap: 10px;
+}
+
+/* ✅ saveRow 첫 번째 버튼(=포토)만 연노랑 */
+.saveRow button:first-child{
+  background: #fff1b8;
+  color: var(--text);
+  border: 1px solid rgba(0,0,0,.08);
+}
+
+.saveRow button:first-child:hover{
+  background: #ffe89a;
+}
+/* ✅ 카드 안에 혹시 남아있는 '사진 버튼'이 또 있으면 숨기고,
+      entryTopActions 안의 것만 보여준다 */
+.entryCard .entryActionBtn.photo{
+  display: none !important;
+}
+.entryCard .entryTopActions .entryActionBtn.photo{
+  display: inline-flex !important;
+}
+/* ✅ 지난일기 상단 줄을 카드 최상단으로 */
+.entryTopLine{
+  margin-top: 0 !important;
+  margin-bottom: 8px;
+}
+
+/* 혹시 예전 우상단 버튼용 padding-top이 남아있어도 카드에서 무력화 */
+.entryCard{
+  padding-top: 12px !important;
+}
+/* ✅ 사진이 실제로 저장된 경우 포토 버튼 강조 */
+.entryActionBtn.photo.hasPhoto{
+  background: #ffd966;      /* 더 진한 옐로우 */
+  box-shadow: 0 0 0 2px rgba(255,217,102,.35);
+}
+/* ✅ todoTop 오른쪽 버튼 묶음: Add + receit 나란히 우측 정렬 */
+.todoTopRight{
+  display:flex;
+  align-items:center;
+  gap:11px;
+}
+
+/* ✅ receit 버튼 색(연노랑) - todoAddBtn 색을 이김 */
+.todoTopRight .todoAddBtn.receiptBtn{
+  background:#fff1b8 !important;
+}
+
+/* ✅ receit가 실제로 추가된 상태(진노랑) */
+.todoTopRight .todoAddBtn.receiptBtn.hasReceipt{
+  background:#ffd966 !important;
+  box-shadow: 0 0 0 2px rgba(255,217,102,.35);
+}
+/* =========================
+   ✅ HistoryPanel: 쇼핑 영수증 옆 미리보기
+   (기존 레이아웃 변경 없음: historyBody 내부에서만 2열)
+   ========================= */
+
+.historyBodyGrid{
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 12px;
+  align-items: start;
+}
+
+.historyBodyGrid.single{
+  grid-template-columns: 1fr;
+}
+
+.historyLeft{
+  min-width: 0;
+}
+
+.historyRight{
+  position: sticky;
+  top: 10px;
+  align-self: start;
+}
+
+.receiptThumbBtn{
+  width: 100%;
+  border: 1px solid rgba(0,0,0,.08);
+  background: rgba(255,255,255,.85);
+  border-radius: 12px;
+  padding: 8px;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0,0,0,.06);
+}
+
+.receiptThumb{
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 10px;
+}
+
+.receiptEmpty{
+  width: 100%;
+  border: 1px dashed rgba(0,0,0,.18);
+  background: rgba(255,255,255,.55);
+  border-radius: 12px;
+  padding: 18px 10px;
+  text-align: center;
+  color: rgba(0,0,0,.55);
+  font-weight: 700;
+}
+
+/* 좁은 화면에서는 아래로 내려서 보기 */
+@media (max-width: 520px){
+  .historyBodyGrid{
+    grid-template-columns: 1fr;
+  }
+  .historyRight{
+    position: static;
+  }
+}
+/* 일기 입력창 포토 버튼 - 사진 있으면 진한 노랑 */
+.save-button.photoBtn.activePhoto {
+  background: #ffd54f;
+  color: #222;
+  border-color: #f4c430;
 }

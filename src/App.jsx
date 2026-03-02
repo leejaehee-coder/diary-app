@@ -12,13 +12,23 @@ import {
   doc,
   updateDoc,
   deleteDoc,
-  serverTimestamp, // ✅ 추가
+  serverTimestamp,
+  setDoc, // ✅ (추가) shoppingMeta 저장용
 } from "firebase/firestore";
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 function App() {
   const [user, setUser] = useState(null);
-
+    // 🔊 공통 사운드 재생 함수
+  const playSound = (fileName) => {
+    try {
+      const audio = new Audio(`/sfx/${fileName}`);
+      audio.volume = 0.6; // 볼륨 (0~1)
+      audio.play();
+    } catch (e) {
+      console.warn("sound play fail:", e);
+    }
+  };
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [text, setText] = useState("");
@@ -30,7 +40,10 @@ function App() {
   const [todoText, setTodoText] = useState("");
   const [price, setPrice] = useState("");
   const [todos, setTodos] = useState([]);
-
+  const [shoppingImageUrl, setShoppingImageUrl] = useState("");
+  const [shoppingImagePath, setShoppingImagePath] = useState("");
+const [receiptUploading, setReceiptUploading] = useState(false);
+const receiptInputRef = useRef(null);
   // ✅ 보기 모드: all | diary | todo
   const [viewMode, setViewMode] = useState("all");
   // ✅ (추가) Entry 검색 (D 상세화면에서만 사용)
@@ -110,6 +123,38 @@ const clearEntrySearch = () => {
 
     return () => unsub();
   }, [user]);
+  // ✅ (추가) 오늘 영수증 meta realtime (저장 성공 후 버튼 진노랑/보기 가능)
+useEffect(() => {
+  if (!user) {
+    setShoppingImageUrl("");
+    setShoppingImagePath("");
+    return;
+  }
+
+  const dateKey = todayKey;
+  const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
+
+  const unsub = onSnapshot(
+    metaRef,
+    (snap) => {
+      if (!snap.exists()) {
+        setShoppingImageUrl("");
+        setShoppingImagePath("");
+        return;
+      }
+      const data = snap.data() || {};
+      setShoppingImageUrl(data.imageUrl || "");
+      setShoppingImagePath(data.imagePath || "");
+    },
+    (err) => {
+      console.error("shoppingMeta snapshot error:", err);
+      setShoppingImageUrl("");
+      setShoppingImagePath("");
+    }
+  );
+
+  return () => unsub();
+}, [user, todayKey]);
 
   // Google 로그인
   const loginGoogle = async () => {
@@ -128,41 +173,75 @@ const clearEntrySearch = () => {
     await deleteDoc(ref);
   };
 
-    // 일기 저장 (+ 사진 1장 업로드)
+     // 일기 저장 (+ 사진 1장 업로드)
   const save = async () => {
-    if (!user) return;
-    const t = (text || "").trim();
-    if (!t) return;
+    try {
+      if (!user) return;
+      const t = (text || "").trim();
+      if (!t) return;
 
-    let imageUrl = "";
-    let imagePath = "";
+      let imageUrl = "";
+      let imagePath = "";
 
-    // ✅ 사진이 있으면 Storage 업로드
-    if (entryPhotoFile) {
-      const ext = (entryPhotoFile.name || "").split(".").pop() || "jpg";
-      imagePath = `users/${user.uid}/entries/${Date.now()}.${ext}`;
+      // ✅ 사진 업로드는 "실패해도 저장 계속" + "무한대기 방지(타임아웃)"
+      const withTimeout = (promise, ms = 12000) =>
+        Promise.race([
+          promise,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("사진 업로드 타임아웃")), ms)
+          ),
+        ]);
 
-      const sRef = storageRef(storage, imagePath);
-      await uploadBytes(sRef, entryPhotoFile);
-      imageUrl = await getDownloadURL(sRef);
+      if (entryPhotoFile) {
+        playSound("camera-shutter.wav");
+        try {
+          const ext = (entryPhotoFile.name || "").split(".").pop() || "jpg";
+          imagePath = `users/${user.uid}/entries/${Date.now()}.${ext}`;
+
+          const sRef = storageRef(storage, imagePath);
+
+          // 업로드가 멈추는 경우를 막기 위해 타임아웃 적용
+                    await withTimeout(uploadBytes(sRef, entryPhotoFile), 12000);
+          imageUrl = await withTimeout(getDownloadURL(sRef), 12000);
+
+          
+        } catch (err) {
+          console.error("사진 업로드 실패(무시하고 텍스트 저장 진행):", err);
+          imageUrl = "";
+          imagePath = "";
+        }
+      }
+
+      const ref = collection(db, "users", user.uid, "entries");
+      await addDoc(ref, {
+        text: t,
+        completed: false,
+        date,
+        time: new Date().toTimeString().slice(0, 5),
+        createdAt: serverTimestamp(),
+        imageUrl,
+        imagePath,
+      });
+            // 🔊 일기 저장 성공 → 페이지 넘김
+      if (!entryPhotoFile) playSound("page-turn.mp3");
+      setText("");
+      setEntryPhotoFile(null);
+      if (entryPhotoInputRef.current) entryPhotoInputRef.current.value = "";
+    } catch (err) {
+      // ✅ save 전체에서 어떤 에러가 나도 콘솔에 무조건 찍히게
+      console.error("save() 전체 실패:", err);
     }
-
-    const ref = collection(db, "users", user.uid, "entries");
-    await addDoc(ref, {
-      text: t,
-      completed: false,
-      date,
-      time: new Date().toTimeString().slice(0, 5),
-      createdAt: serverTimestamp(),
-      imageUrl,
-      imagePath,
-    });
-
-    setText("");
-    setEntryPhotoFile(null);
-    if (entryPhotoInputRef.current) entryPhotoInputRef.current.value = "";
   };
+const handleReceiptClick = () => {
+  console.log("receipt click ✅", {
+    todoMode,
+    before: shoppingImageUrl,
+    time: new Date().toISOString(),
+  });
 
+  // 클릭할 때마다 값 토글 → 색 변화 확인용
+  setShoppingImageUrl((prev) => (prev ? "" : "temp"));
+};
   // Todo 추가
   const addTodo = async () => {
     try {
@@ -202,6 +281,8 @@ const clearEntrySearch = () => {
 
       setTodoText("");
       setPrice("");
+      // 🔊 쇼핑 아이템 추가 성공 → 차칭
+if (isShopping) playSound("cash-kaching.mp3");
     } catch (e) {
       console.error("ADD FAIL:", e);
       alert(e?.message || "저장 실패(콘솔 확인)");
@@ -213,6 +294,9 @@ const clearEntrySearch = () => {
     if (!user) return;
     const ref = doc(db, "users", user.uid, "todos", id);
     await updateDoc(ref, { completed: !completed });
+
+    // 🔊 TODO 체크 토글 성공 → 벨
+    playSound("bell-check.mp3");
   };
 
   // Todo 삭제
@@ -308,7 +392,7 @@ const clearEntrySearch = () => {
                         <div className="saveRow">
               <button
                 type="button"
-                className="save-button photoBtn"
+                className={`save-button photoBtn ${entryPhotoFile ? "activePhoto" : ""}`}
                 onClick={() => entryPhotoInputRef.current?.click()}
               >
                 포토
@@ -342,9 +426,128 @@ const clearEntrySearch = () => {
                 {todoMode === "shopping" ? "SHOPPING" : "TODO"}
               </h2>
 
-              <button className="todoAddBtn" onClick={addTodo}>
-                + Add
-              </button>
+                                          <div className="todoTopRight">
+  {todoMode === "shopping" && (
+    <>
+      <button
+  type="button"
+  className={`todoAddBtn receiptBtn ${shoppingImageUrl ? "hasReceipt" : ""}`}
+  title={
+    shoppingImageUrl
+      ? "클릭: 영수증 보기 / Shift+클릭: 교체 / Alt+클릭: 삭제"
+      : "영수증 업로드"
+  }
+  style={{
+    background: shoppingImageUrl ? "#ffd966" : "#fff1b8",
+    opacity: receiptUploading ? 0.7 : 1,
+  }}
+  disabled={receiptUploading}
+  onClick={async (e) => {
+    // ✅ Alt+클릭: 삭제 (UI 추가 없이)
+    if (e.altKey && shoppingImageUrl) {
+      if (!user) return;
+      try {
+        const dateKey = todayKey;
+
+        // storage 파일 삭제(경로가 있을 때만)
+        if (shoppingImagePath) {
+          try {
+            await deleteObject(storageRef(storage, shoppingImagePath));
+          } catch (err) {
+            console.warn("영수증 파일 삭제 실패(무시):", err);
+          }
+        }
+
+        // meta 문서 삭제
+        await deleteDoc(doc(db, "users", user.uid, "shoppingMeta", dateKey));
+      } catch (err) {
+        console.error("영수증 삭제 실패:", err);
+        alert(err?.message || "영수증 삭제 실패(콘솔 확인)");
+      }
+      return;
+    }
+
+    // ✅ Shift+클릭: 교체 업로드
+    if (e.shiftKey) {
+      receiptInputRef.current?.click();
+      return;
+    }
+
+    // ✅ 기본 클릭: 있으면 보기 / 없으면 업로드
+    if (shoppingImageUrl) {
+      window.open(shoppingImageUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    receiptInputRef.current?.click();
+  }}
+>
+  Receipt
+</button>
+
+<input
+  ref={receiptInputRef}
+  type="file"
+  accept="image/*"
+  style={{ display: "none" }}
+  onChange={async (e) => {
+    const f = e.target.files?.[0];
+    // 같은 파일 다시 선택 가능하게 먼저 초기화
+    e.target.value = "";
+    if (!f) return;
+
+    if (!user) {
+      alert("로그인이 필요해요!");
+      return;
+    }
+
+    setReceiptUploading(true);
+
+    try {
+      const dateKey = todayKey;
+      const ext = (f.name || "").split(".").pop() || "jpg";
+      const imagePath = `users/${user.uid}/shoppingReceipts/${dateKey}.${ext}`;
+
+      // 기존 파일이 있으면 삭제 시도(실패해도 진행)
+      if (shoppingImagePath) {
+        try {
+          await deleteObject(storageRef(storage, shoppingImagePath));
+        } catch (err) {
+          console.warn("기존 영수증 삭제 실패(무시):", err);
+        }
+      }
+
+      // 업로드
+      const sRef = storageRef(storage, imagePath);
+      await uploadBytes(sRef, f);
+      const imageUrl = await getDownloadURL(sRef);
+
+      // meta 저장(하루 1장)
+      const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
+      await setDoc(
+        metaRef,
+        { imageUrl, imagePath, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+      // 🔊 영수증 업로드 성공 → 프린트
+playSound("receipt-print.mp3");
+      // ✅ 여기서 setShoppingImageUrl 직접 안 해도 됨:
+      // 위 onSnapshot이 저장 성공 후 값을 가져오면서 자동으로 진노랑/보기 됨.
+    } catch (err) {
+      console.error("영수증 업로드 실패:", err);
+      alert(err?.message || "영수증 업로드 실패(콘솔 확인)");
+    } finally {
+      setReceiptUploading(false);
+    }
+  }}
+/>
+    </>
+  )}
+
+  <button className="todoAddBtn" onClick={addTodo}>
+    + Add
+  </button>
+</div>
             </div>
 
             {/* ✅ 오늘 키 (기본 화면은 오늘 것만) */}
@@ -374,123 +577,118 @@ const clearEntrySearch = () => {
 
               return (
                 <>
-                  {/* =========================
+        
+          {/* =========================
           ✅ TODO MODE
          ========================= */}
-                  {todoMode === "todo" && (
-                    <>
-                      <input
-                        className="todoInput"
-                        placeholder="할 일 입력"
-                        value={todoText}
-                        onChange={(e) => setTodoText(e.target.value)}
-                      />
+{todoMode === "todo" && (
+  <>
+    <input
+      className="todoInput"
+      placeholder="할 일 입력"
+      value={todoText}
+      onChange={(e) => setTodoText(e.target.value)}
+    />
 
-                      {/* ✅ 기본 화면: 오늘 것만 */}
-                      <ul>
-                        {todayItems.map((todo) => (
-                          <li
-                            key={todo.id}
-                            className={`todo-item ${
-                              todo.completed ? "completed" : ""
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={!!todo.completed}
-                              onChange={() =>
-                                toggleTodo(todo.id, !!todo.completed)
-                              }
-                            />
+    {/* ✅ 기본 화면: 오늘 것만 */}
+    <ul>
+      {todayItems.map((todo) => (
+        <li
+          key={todo.id}
+          className={`todo-item ${todo.completed ? "completed" : ""}`}
+        >
+          <input
+            type="checkbox"
+            checked={!!todo.completed}
+            onChange={() => toggleTodo(todo.id, !!todo.completed)}
+          />
 
-                            <span className="todoText">
-                              <span className="todoTextInner">{todo.text}</span>
-                            </span>
+          <span className="todoText">
+            <span className="todoTextInner">{todo.text}</span>
+          </span>
 
-                            <button onClick={() => deleteTodoItem(todo.id)}>
-                              삭제
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
+          <button onClick={() => deleteTodoItem(todo.id)}>삭제</button>
+        </li>
+      ))}
+    </ul>
 
-                      {/* ✅ 상세 패널: 날짜 아코디언 */}
-                      {isDetailView && (
-                        <HistoryPanel
-                          mode="todo"
-                          dates={historyDates}
-                          byDate={byDate}
-                          defaultOpenCount={4}
-                          onToggleTodo={toggleTodo}
-                          onDelete={deleteTodoItem}
-                        />
-                      )}
-                    </>
-                  )}
+    {/* ✅ 상세 패널: 날짜 아코디언 */}
+    {isDetailView && (
+      <HistoryPanel
+        mode="todo"
+        dates={historyDates}
+        byDate={byDate}
+        defaultOpenCount={4}
+        onToggleTodo={toggleTodo}
+        onDelete={deleteTodoItem}
+        user={user}
+      />
+    )}
+  </>
+)}
 
-                  {/* =========================
+{/* =========================
           ✅ SHOPPING MODE
          ========================= */}
-                  {todoMode === "shopping" && (
-                    <>
-                      <input
-                        className="todoInput"
-                        placeholder="항목"
-                        value={todoText}
-                        onChange={(e) => setTodoText(e.target.value)}
-                      />
+{todoMode === "shopping" && (
+  <>
+    <input
+      className="todoInput"
+      placeholder="항목"
+      value={todoText}
+      onChange={(e) => setTodoText(e.target.value)}
+    />
 
-                      <input
-                        className="todoInput priceFull"
-                        type="number"
-                        placeholder="가격"
-                        value={price}
-                        onChange={(e) => setPrice(e.target.value)}
-                      />
+    <input
+      className="todoInput priceFull"
+      type="number"
+      placeholder="가격"
+      value={price}
+      onChange={(e) => setPrice(e.target.value)}
+    />
 
-                      {/* ✅ 기본 화면: 오늘 것만 */}
-                      <ul>
-                        {todayItems.map((item) => (
-                          <li key={item.id} className="todo-item">
-                            <span className="todoText">
-                              <span className="todoTextInner">{item.text}</span>
-                            </span>
+    {/* ✅ 기본 화면: 오늘 것만 */}
+    <ul>
+      {todayItems.map((item) => (
+        <li key={item.id} className="todo-item">
+          <span className="todoText">
+            <span className="todoTextInner">{item.text}</span>
+          </span>
 
-                            {Number(item.price || 0) > 0 && (
-                              <span className="priceTag">
-                                {Number(item.price || 0).toLocaleString()}원
-                              </span>
-                            )}
+          {Number(item.price || 0) > 0 && (
+            <span className="priceTag">
+              {Number(item.price || 0).toLocaleString()}원
+            </span>
+          )}
 
-                            <button onClick={() => deleteTodoItem(item.id)}>
-                              삭제
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
+          <button onClick={() => deleteTodoItem(item.id)}>삭제</button>
+        </li>
+      ))}
+    </ul>
 
-                      {/* ✅ 오늘 총합만 */}
-                      <div className="todayTotal">
-                        총합:{" "}
-                        {todayItems
-                          .reduce((sum, t) => sum + Number(t.price || 0), 0)
-                          .toLocaleString()}
-                        원
-                      </div>
+    {/* ✅ 오늘 총합만 */}
+    <div className="todayTotal">
+      총합:{" "}
+      {todayItems
+        .reduce((sum, t) => sum + Number(t.price || 0), 0)
+        .toLocaleString()}
+      원
+    </div>
 
-                      {/* ✅ 상세 패널: 날짜 아코디언 */}
-                      {isDetailView && (
-                        <HistoryPanel
-                          mode="shopping"
-                          dates={historyDates}
-                          byDate={byDate}
-                          defaultOpenCount={4}
-                          onToggleTodo={toggleTodo}
-                          onDelete={deleteTodoItem}
-                        />
-                      )}
-                    </>
-                  )}
+    {/* ✅ 상세 패널: 날짜 아코디언 */}
+    {isDetailView && (
+      <HistoryPanel
+        mode="shopping"
+        dates={historyDates}
+        byDate={byDate}
+        defaultOpenCount={4}
+        onToggleTodo={toggleTodo}
+        onDelete={deleteTodoItem}
+        user={user}
+      />
+    )}
+  </>
+)}
                 </>
               );
             })()}
@@ -627,7 +825,36 @@ function EntryCard({ entry, viewMode, onDelete, user, entrySearchApplied }) {
     setRemovePhoto(false);
     if (editPhotoInputRef.current) editPhotoInputRef.current.value = "";
   };
+    // ✅ (추가) 사진: Shift+클릭 삭제 (Storage + Firestore)
+  const deletePhotoWithShift = async () => {
+    try {
+      if (!user?.uid) return;
 
+      const ok = window.confirm("이 일기의 사진을 삭제할까?");
+      if (!ok) return;
+
+      const imagePath = entry?.imagePath || "";
+
+      // 1) storage 파일 삭제(경로 있을 때만)
+      if (imagePath) {
+        try {
+          await deleteObject(storageRef(storage, imagePath));
+        } catch (e) {
+          console.warn("entry photo storage delete fail:", e);
+        }
+      }
+
+      // 2) Firestore 메타 제거
+      const ref = doc(db, "users", user.uid, "entries", entry.id);
+      await updateDoc(ref, { imageUrl: "", imagePath: "" });
+
+      // 3) 열려있던 팝업 닫기
+      setPhotoOpen(false);
+    } catch (e) {
+      console.error("deletePhotoWithShift fail:", e);
+      alert(e?.message || "사진 삭제 실패(콘솔 확인)");
+    }
+  };
   const cancelEdit = () => {
     setIsEditing(false);
     setDraft(entry?.text || "");
@@ -635,7 +862,36 @@ function EntryCard({ entry, viewMode, onDelete, user, entrySearchApplied }) {
     setRemovePhoto(false);
     if (editPhotoInputRef.current) editPhotoInputRef.current.value = "";
   };
+    // ✅ (추가) 사진: 파일 선택 즉시 업로드 + Firestore 반영
+  const uploadPhotoNow = async (file) => {
+    try {
+      if (!user?.uid) return;
+      if (!file) return;
 
+      // 기존 사진 있으면 먼저 삭제(깔끔)
+      const oldPath = entry?.imagePath || "";
+      if (oldPath) {
+        try {
+          await deleteObject(storageRef(storage, oldPath));
+        } catch (e) {
+          console.warn("old entry photo delete fail:", e);
+        }
+      }
+
+      const ext = (file.name || "").split(".").pop() || "jpg";
+      const imagePath = `users/${user.uid}/entries/${entry.id}_${Date.now()}.${ext}`;
+
+      const sRef = storageRef(storage, imagePath);
+      await uploadBytes(sRef, file);
+      const imageUrl = await getDownloadURL(sRef);
+
+      const ref = doc(db, "users", user.uid, "entries", entry.id);
+      await updateDoc(ref, { imageUrl, imagePath });
+    } catch (e) {
+      console.error("uploadPhotoNow fail:", e);
+      alert(e?.message || "사진 업로드 실패(콘솔 확인)");
+    }
+  };
   const saveEdit = async () => {
     if (!user) return;
 
@@ -693,68 +949,108 @@ function EntryCard({ entry, viewMode, onDelete, user, entrySearchApplied }) {
 
   return (
     <div className="entryCard">
-      {/* 우상단 액션 */}
-      <div className="entryActions">
-        {!isEditing ? (
-          <>
-            <button
-              type="button"
-              className="entryActionBtn edit"
-              onClick={startEdit}
-              title="수정"
-              aria-label="수정"
-            >
-              ✎
-            </button>
-            <button
-              type="button"
-              className="entryActionBtn delete"
-              onClick={() => onDelete?.(entry.id)}
-              title="삭제"
-              aria-label="삭제"
-            >
-              ×
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="entryActionBtn edit"
-              onClick={saveEdit}
-              title="저장"
-              aria-label="저장"
-            >
-              ✓
-            </button>
-            <button
-              type="button"
-              className="entryActionBtn delete"
-              onClick={cancelEdit}
-              title="취소"
-              aria-label="취소"
-            >
-              ×
-            </button>
-          </>
-        )}
-      </div>
+      
+              {/* ✅ 상단 라인: 시간 + (사진/수정/삭제) 같은 줄 */}
+      <div className="entryTopLine">
+        <div className="entryTimeText">{timeText}</div>
 
-      <div className="entryDateLine">{timeText}</div>
+        <div className="entryTopActions">
+          {/* ✅ 사진 버튼: 수정/삭제 앞, 연노랑 동그라미 */}
+                              {!isEditing && (
+            <>
+              <button
+                type="button"
+                className={`entryActionBtn photo ${entry?.imageUrl ? "hasPhoto" : ""}`}
+                onClick={(e) => {
+                  // ✅ Shift+클릭: 사진이 있을 때만 삭제
+                  if (e.shiftKey) {
+                    if (entry?.imageUrl) deletePhotoWithShift();
+                    return;
+                  }
 
-      {/* 사진 보기(기존 기능 유지) */}
-      {!isEditing && entry?.imageUrl && (
-        <div style={{ marginTop: "8px" }}>
-          <button
-            type="button"
-            className="entryMiniBtn"
-            onClick={() => setPhotoOpen(true)}
-          >
-            사진 보기
-          </button>
+                  // ✅ 기본 클릭: 사진 있으면 크게 보기, 없으면 업로드 선택창
+                  if (entry?.imageUrl) {
+                    setPhotoOpen(true);
+                    return;
+                  }
+
+                  editPhotoInputRef.current?.click();
+                }}
+                title={
+                  entry?.imageUrl
+                    ? "클릭: 사진 보기 / Shift+클릭: 사진 삭제"
+                    : "클릭: 사진 업로드"
+                }
+                aria-label="사진"
+              >
+                📸
+              </button>
+
+              {/* ✅ 숨김 파일 input: (사진 없을 때) 📸 버튼이 이걸 클릭함 */}
+                            <input
+                ref={editPhotoInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const f = e.target.files?.[0] || null;
+                  // 같은 파일 다시 선택 가능하게 초기화
+                  e.target.value = "";
+                  if (!f) return;
+
+                  await uploadPhotoNow(f);
+                }}
+              />
+            </>
+          )}
+
+          {!isEditing ? (
+            <>
+              <button
+                type="button"
+                className="entryActionBtn edit"
+                onClick={startEdit}
+                title="수정"
+                aria-label="수정"
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                className="entryActionBtn delete"
+                onClick={() => onDelete?.(entry.id)}
+                title="삭제"
+                aria-label="삭제"
+              >
+                ×
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+  type="button"
+  className="entryActionBtn edit"
+  onClick={saveEdit}
+  title="저장"
+  aria-label="저장"
+>
+  ✎
+</button>
+              <button
+                type="button"
+                className="entryActionBtn delete"
+                onClick={cancelEdit}
+                title="취소"
+                aria-label="취소"
+              >
+                ×
+              </button>
+            </>
+          )}
         </div>
-      )}
+      </div>   
 
+      
       {photoOpen && (
         <div
           onClick={() => setPhotoOpen(false)}
@@ -785,12 +1081,46 @@ function EntryCard({ entry, viewMode, onDelete, user, entrySearchApplied }) {
       )}
 
       {/* 본문 */}
-      {!isEditing ? (
-        <div className="entryBody">
-          {viewMode === "diary" && entrySearchApplied
-            ? highlightText(entry?.text || "", entrySearchApplied)
-            : entry?.text}
-        </div>
+            {!isEditing ? (
+        entry?.imageUrl ? (
+          <div className="historyBodyGrid">
+            <div className="historyLeft">
+              <div className="entryBody">
+                {viewMode === "diary" && entrySearchApplied
+                  ? highlightText(entry?.text || "", entrySearchApplied)
+                  : entry?.text}
+              </div>
+            </div>
+
+            <div className="historyRight">
+              <button
+                type="button"
+                className="receiptThumbBtn"
+                onClick={(e) => {
+                  if (e.shiftKey) {
+                    deletePhotoWithShift();
+                    return;
+                  }
+                  setPhotoOpen(true);
+                }}
+                title="클릭: 크게 보기 / Shift+클릭: 사진 삭제"
+              >
+                <img
+                  className="receiptThumb"
+                  src={entry.imageUrl}
+                  alt={`entry-${entry.id}`}
+                  loading="lazy"
+                />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="entryBody">
+            {viewMode === "diary" && entrySearchApplied
+              ? highlightText(entry?.text || "", entrySearchApplied)
+              : entry?.text}
+          </div>
+        )
       ) : (
         <>
           <textarea
@@ -798,40 +1128,6 @@ function EntryCard({ entry, viewMode, onDelete, user, entrySearchApplied }) {
             onChange={(e) => setDraft(e.target.value)}
             style={{ marginTop: "10px" }}
           />
-
-          {/* ✅ 수정 모드에서만: 사진 교체/제거 */}
-          <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-            <button
-              type="button"
-              className="save-button photoBtn"
-              onClick={() => editPhotoInputRef.current?.click()}
-            >
-              포토
-            </button>
-
-            <button
-              type="button"
-              className="save-button photoRemoveBtn"
-              onClick={() => {
-                setRemovePhoto(true);
-                setEditPhotoFile(null);
-                if (editPhotoInputRef.current) editPhotoInputRef.current.value = "";
-              }}
-            >
-              사진 제거
-            </button>
-
-            <input
-              ref={editPhotoInputRef}
-              type="file"
-              accept="image/*"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                setEditPhotoFile(e.target.files?.[0] || null);
-                setRemovePhoto(false);
-              }}
-            />
-          </div>
         </>
       )}
     </div>
@@ -844,8 +1140,195 @@ function HistoryPanel({
   defaultOpenCount = 4,
   onToggleTodo,
   onDelete,
+  user,
 }) {
   const [open, setOpen] = useState(null);
+
+  // ✅ (추가) 날짜별 영수증 URL 캐시
+  const [receiptUrlByDate, setReceiptUrlByDate] = useState({});
+  const receiptUnsubsRef = useRef({}); // { [dateKey]: () => void }
+  // ✅ (추가) 날짜 선택 업로드용
+  const receiptFileInputRef = useRef(null);
+  const [receiptPickDate, setReceiptPickDate] = useState("");
+
+  // ✅ (추가) 수정모드 토글(일괄 수정 A용: UI는 다음 스텝에서)
+  const [editDay, setEditDay] = useState({}); // { [dateKey]: true/false }
+    // ✅ (추가) 날짜별 임시 편집값 (text/price)
+  // draftById: { [todoId]: { text: string, price: string } }
+  const [draftById, setDraftById] = useState({});
+
+  const setDraft = (id, patch) => {
+    setDraftById((prev) => {
+      const cur = prev?.[id] || {};
+      return { ...(prev || {}), [id]: { ...cur, ...patch } };
+    });
+  };
+
+  // ✅ (추가) 항목 1개 저장 (text/price)
+  const saveOneItem = async (item) => {
+    try {
+      if (!user?.uid) return;
+      if (!item?.id) return;
+
+      const d = draftById?.[item.id] || {};
+      const nextText = String(d.text ?? item.text ?? "").trim();
+      const nextPrice = Number(d.price ?? item.price ?? 0) || 0;
+
+      if (!nextText) return;
+
+      const ref = doc(db, "users", user.uid, "todos", item.id);
+      await updateDoc(ref, { text: nextText, price: nextPrice });
+
+      // ✅ 저장 성공 후 draft 정리
+      setDraftById((prev) => {
+        const next = { ...(prev || {}) };
+        delete next[item.id];
+        return next;
+      });
+
+      console.log("saveOneItem ok:", item.id);
+    } catch (e) {
+      console.error("saveOneItem fail:", e);
+      alert(e?.message || "저장 실패(콘솔 확인)");
+    }
+  };
+  const openReceiptOrPickFile = (dateKey, receiptUrl) => {
+    // 영수증이 있으면: 새탭 크게 보기
+    if (receiptUrl) {
+      window.open(receiptUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    // 영수증이 없으면: 업로드 선택창
+    setReceiptPickDate(dateKey);
+    receiptFileInputRef.current?.click();
+  };
+
+  const deleteReceiptWithShift = async (dateKey) => {
+    try {
+      if (!user?.uid) return;
+
+      const ok = window.confirm(`${dateKey} 영수증을 삭제할까?`);
+      if (!ok) return;
+
+      const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
+      const snap = await new Promise((resolve, reject) => {
+        const unsub = onSnapshot(
+          metaRef,
+          (s) => {
+            unsub();
+            resolve(s);
+          },
+          (e) => {
+            unsub();
+            reject(e);
+          }
+        );
+      });
+
+      if (!snap.exists()) return;
+
+      const imagePath = snap.data()?.imagePath || "";
+      // 1) 스토리지 파일 삭제(있으면)
+      if (imagePath) {
+        try {
+          await deleteObject(storageRef(storage, imagePath));
+        } catch (e) {
+          console.warn("receipt storage delete fail:", e);
+        }
+      }
+      // 2) meta 문서 삭제
+      await deleteDoc(metaRef);
+    } catch (e) {
+      console.error("deleteReceiptWithShift fail:", e);
+      alert(e?.message || "영수증 삭제 실패(콘솔 확인)");
+    }
+  };
+    const deleteDayAllItems = async (dateKey, items) => {
+    try {
+  console.log("deleteDayAllItems called:", dateKey, items);
+      if (!user?.uid) return;
+
+      const ok = window.confirm(`${dateKey}의 항목을 전체 삭제할까?`);
+      if (!ok) return;
+
+      // 1) 해당 날짜 항목 전부 삭제
+      await Promise.all(
+        (items || []).map((it) =>
+          it?.id ? onDelete?.(it.id) : Promise.resolve()
+        )
+      );
+
+      // 2) 해당 날짜 영수증 meta + storage도 같이 삭제(있으면)
+      const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
+
+      const snap = await new Promise((resolve, reject) => {
+        const unsub = onSnapshot(
+          metaRef,
+          (s) => {
+            unsub();
+            resolve(s);
+          },
+          (e) => {
+            unsub();
+            reject(e);
+          }
+        );
+      });
+
+      if (snap.exists()) {
+        const imagePath = snap.data()?.imagePath || "";
+        if (imagePath) {
+          try {
+            await deleteObject(storageRef(storage, imagePath));
+          } catch (e) {
+            console.warn("receipt storage delete fail (day delete):", e);
+          }
+        }
+        await deleteDoc(metaRef);
+      }
+
+      console.log("delete day all done:", dateKey);
+    } catch (e) {
+      console.error("deleteDayAllItems fail:", e);
+      alert(e?.message || "날짜 전체 삭제 실패(콘솔 확인)");
+    }
+  };
+  const onReceiptFilePicked = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+
+    try {
+      if (!user?.uid) return;
+      const dateKey = receiptPickDate;
+      if (!dateKey) return;
+
+      const ext = (f.name || "").split(".").pop() || "jpg";
+      const imagePath = `users/${user.uid}/shoppingReceipts/${dateKey}.${ext}`;
+
+      const sRef = storageRef(storage, imagePath);
+      await uploadBytes(sRef, f);
+      const imageUrl = await getDownloadURL(sRef);
+
+      const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
+      await setDoc(
+  metaRef,
+  {
+    imageUrl,
+    imagePath,
+    updatedAt: serverTimestamp(),
+  },
+  { merge: true }
+);
+
+      // ✅ 선택창 재사용 가능하게 초기화
+      if (receiptFileInputRef.current) receiptFileInputRef.current.value = "";
+      setReceiptPickDate("");
+    } catch (err) {
+      console.error("receipt upload fail:", err);
+      alert(err?.message || "영수증 업로드 실패(콘솔 확인)");
+      if (receiptFileInputRef.current) receiptFileInputRef.current.value = "";
+    }
+  };
 
   // mode 바뀌면 기본 펼침 상태 재설정(최근 3~4일 자동 펼침)
   useEffect(() => {
@@ -862,6 +1345,67 @@ function HistoryPanel({
     setOpen(init);
   }, [open, dates, defaultOpenCount]);
 
+  // ✅ (추가) shopping 모드에서, "열린 날짜"의 shoppingMeta를 실시간 구독
+  useEffect(() => {
+    // todo 모드면 영수증 기능 필요 없음
+    if (mode !== "shopping") return;
+
+    // user 없으면 구독 불가
+    if (!user?.uid) return;
+
+    // open이 아직 없으면 대기
+    if (!open) return;
+
+    const openedDates = Object.keys(open).filter((d) => open[d]);
+
+    // 1) 새로 열린 날짜 구독 시작
+    openedDates.forEach((dateKey) => {
+      if (receiptUnsubsRef.current[dateKey]) return;
+
+      const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
+
+      const unsub = onSnapshot(
+        metaRef,
+        (snap) => {
+          const url = snap.exists() ? (snap.data()?.imageUrl || "") : "";
+          setReceiptUrlByDate((prev) => ({ ...prev, [dateKey]: url }));
+        },
+        (err) => {
+          console.error("shoppingMeta snapshot error:", err);
+          setReceiptUrlByDate((prev) => ({ ...prev, [dateKey]: "" }));
+        }
+      );
+
+      receiptUnsubsRef.current[dateKey] = unsub;
+    });
+
+    // 2) 닫힌 날짜 구독 해제
+    Object.keys(receiptUnsubsRef.current).forEach((dateKey) => {
+      if (!openedDates.includes(dateKey)) {
+        try {
+          receiptUnsubsRef.current[dateKey]?.();
+        } catch {}
+        delete receiptUnsubsRef.current[dateKey];
+        // url은 남겨둬도 되지만, 닫힐 때 정리하고 싶으면 아래 유지:
+        // setReceiptUrlByDate((prev) => {
+        //   const next = { ...prev };
+        //   delete next[dateKey];
+        //   return next;
+        // });
+      }
+    });
+
+    // unmount 시 전부 정리
+    return () => {
+      Object.values(receiptUnsubsRef.current).forEach((fn) => {
+        try {
+          fn?.();
+        } catch {}
+      });
+      receiptUnsubsRef.current = {};
+    };
+  }, [mode, user, open]);
+
   if (!dates || dates.length === 0) {
     return (
       <div className="historyPanel">
@@ -874,65 +1418,283 @@ function HistoryPanel({
   return (
     <div className="historyPanel">
       <div className="historyTitle">이전 기록</div>
-
+            {/* ✅ (추가) 날짜별 영수증 업로드용 숨김 input (HistoryPanel 내부에서만) */}
+      <input
+        ref={receiptFileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={onReceiptFilePicked}
+      />
       <div className="historyList">
         {dates.map((d) => {
           const isOpen = !!open?.[d];
           const items = byDate[d] || [];
-          const dayTotal = items.reduce((sum, it) => sum + Number(it.price || 0), 0);
+          const dayTotal = items.reduce(
+            (sum, it) => sum + Number(it.price || 0),
+            0
+          );
+
+          const receiptUrl = receiptUrlByDate?.[d] || "";
 
           return (
             <div key={d} className="historyDay">
-              <button
-                type="button"
+              
+
+                <div
+                role="button"
+                tabIndex={0}
                 className={`historyDateBtn ${isOpen ? "open" : ""}`}
                 onClick={() =>
                   setOpen((prev) => ({ ...(prev || {}), [d]: !isOpen }))
                 }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setOpen((prev) => ({ ...(prev || {}), [d]: !isOpen }));
+                  }
+                }}
                 aria-expanded={isOpen}
               >
                 <span className="historyDateText">{d}</span>
-                <span className="historyCount">{items.length}</span>
-              {mode === "shopping" && (
-  <span className="historyTotal">
-    {dayTotal.toLocaleString()}원
-  </span>
-)}
-              
-              </button>
+
+                {/* ✅ 오른쪽 끝: 동그란 버튼 3개 */}
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                  onClick={(e) => e.stopPropagation()} // 날짜 토글 방지
+                >
+                  {/* 🧾 영수증: 클릭=새탭 보기 / 없으면 업로드, Shift+클릭=삭제 */}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className={`entryActionBtn photo ${
+                      receiptUrl ? "hasPhoto" : ""
+                    }`}
+                    title="영수증 (클릭: 보기/업로드, Shift+클릭: 삭제)"
+                    aria-label="영수증"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.shiftKey) {
+                        deleteReceiptWithShift(d);
+                        return;
+                      }
+                      openReceiptOrPickFile(d, receiptUrl);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        if (e.shiftKey) {
+                          deleteReceiptWithShift(d);
+                        } else {
+                          openReceiptOrPickFile(d, receiptUrl);
+                        }
+                      }
+                    }}
+                  >
+                    🧾
+                  </span>
+
+                  <span
+  role="button"
+  tabIndex={0}
+  className="entryActionBtn edit"
+  title="수정"
+  aria-label="수정"
+  onClick={(e) => {
+    e.stopPropagation();
+    setEditDay((prev) => {
+      const wasOn = !!prev?.[d];
+      const next = !wasOn;
+
+      // ✅ ON -> OFF일 때: 해당 날짜 items 일괄 저장
+      if (wasOn) {
+        Promise.all((items || []).map((it) => saveOneItem(it)));
+      }
+
+      console.log("edit day toggle:", d, next);
+      return { ...(prev || {}), [d]: next };
+    });
+  }}
+  onKeyDown={(e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setEditDay((prev) => {
+        const wasOn = !!prev?.[d];
+        const next = !wasOn;
+
+        // ✅ ON -> OFF일 때: 해당 날짜 items 일괄 저장
+        if (wasOn) {
+          Promise.all((items || []).map((it) => saveOneItem(it)));
+        }
+
+        console.log("edit day toggle:", d, next);
+        return { ...(prev || {}), [d]: next };
+      });
+    }
+  }}
+>
+  ✎
+</span>
+                  {/* × 삭제(확인용 로그) */}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="entryActionBtn delete"
+                    title="삭제"
+                    aria-label="삭제"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteDayAllItems(d, items);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        deleteDayAllItems(d, items);
+                      }
+                    }}
+                  >
+                    ×
+                  </span>
+                </span>
+              </div>
 
               {isOpen && (
                 <div className="historyBody">
-                  <ul className="historyUl">
-                    {items.map((it) => (
-                      <li
-                        key={it.id}
-                        className={`todo-item ${
-                          mode === "todo" && it.completed ? "completed" : ""
-                        }`}
-                      >
-                        {mode === "todo" && (
-                          <input
-                            type="checkbox"
-                            checked={!!it.completed}
-                            onChange={() => onToggleTodo?.(it.id, !!it.completed)}
-                          />
+                  {/* ✅ (추가) shopping 모드일 때만: 왼쪽=목록 / 오른쪽=영수증 */}
+                  <div
+                    className={
+                      mode === "shopping"
+                        ? "historyBodyGrid"
+                        : "historyBodyGrid single"
+                    }
+                  >
+                    <div className="historyLeft">
+                                            <ul className="historyUl">
+                        {items.map((it) => {
+                          const dayEditOn = !!editDay?.[d];
+                          const draft = draftById?.[it.id] || {};
+
+                          const textVal =
+                            draft.text !== undefined ? draft.text : it.text || "";
+
+                          const priceVal =
+                            draft.price !== undefined
+                              ? draft.price
+                              : String(it.price ?? "");
+
+                          return (
+                            <li
+                              key={it.id}
+                              className={`todo-item ${
+                                mode === "todo" && it.completed
+                                  ? "completed"
+                                  : ""
+                              }`}
+                            >
+                              {mode === "todo" && (
+                                <input
+                                  type="checkbox"
+                                  checked={!!it.completed}
+                                  onChange={() =>
+                                    onToggleTodo?.(it.id, !!it.completed)
+                                  }
+                                />
+                              )}
+
+                              {/* ✅ 텍스트: 편집모드면 input, 아니면 기존 표시 */}
+                              <span className="todoText">
+                                {dayEditOn ? (
+                                  <input
+                                    type="text"
+                                    value={textVal}
+                                    onChange={(e) =>
+                                      setDraft(it.id, { text: e.target.value })
+                                    }
+                                    style={{
+                                      width: "100%",
+                                      background: "transparent",
+                                      border: "1px solid rgba(0,0,0,0.18)",
+                                      borderRadius: "10px",
+                                      padding: "6px 8px",
+                                    }}
+                                  />
+                                ) : (
+                                  <span className="todoTextInner">{it.text}</span>
+                                )}
+                              </span>
+
+                              {/* ✅ 가격: shopping일 때만. 편집모드면 input, 아니면 기존 priceTag */}
+                              {mode === "shopping" &&
+                                (dayEditOn ? (
+                                  <input
+                                    type="number"
+                                    value={priceVal}
+                                    onChange={(e) =>
+                                      setDraft(it.id, { price: e.target.value })
+                                    }
+                                    style={{
+                                      width: "92px",
+                                      background: "transparent",
+                                      border: "1px solid rgba(0,0,0,0.18)",
+                                      borderRadius: "10px",
+                                      padding: "6px 8px",
+                                      textAlign: "right",
+                                    }}
+                                  />
+                                ) : Number(it.price || 0) > 0 ? (
+                                  <span className="priceTag">
+                                    {Number(it.price || 0).toLocaleString()}원
+                                  </span>
+                                ) : null)}
+
+                              {/* ✅ 편집모드면 ✓ 저장 버튼 노출 (항목 1개 저장) */}
+                              
+
+                              {/* 기존 삭제는 그대로 */}
+                              <button onClick={() => onDelete?.(it.id)}>
+                                삭제
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+
+                    {mode === "shopping" && (
+                      <div className="historyRight">
+                        {receiptUrl ? (
+                          <button
+                            type="button"
+                            className="receiptThumbBtn"
+                            onClick={() =>
+                              window.open(
+                                receiptUrl,
+                                "_blank",
+                                "noopener,noreferrer"
+                              )
+                            }
+                            title="클릭하면 크게 보기"
+                          >
+                            <img
+                              className="receiptThumb"
+                              src={receiptUrl}
+                              alt={`receipt-${d}`}
+                              loading="lazy"
+                            />
+                          </button>
+                        ) : (
+                          <div className="receiptEmpty">
+                            영수증 없음
+                          </div>
                         )}
-
-                        <span className="todoText">
-                          <span className="todoTextInner">{it.text}</span>
-                        </span>
-
-                        {mode === "shopping" && Number(it.price || 0) > 0 && (
-                          <span className="priceTag">
-                            {Number(it.price || 0).toLocaleString()}원
-                          </span>
-                        )}
-
-                        <button onClick={() => onDelete?.(it.id)}>삭제</button>
-                      </li>
-                    ))}
-                  </ul>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
