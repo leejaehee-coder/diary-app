@@ -10,6 +10,7 @@ import {
   orderBy,
   onSnapshot,
   doc,
+  getDoc,
   updateDoc,
   deleteDoc,
   serverTimestamp,
@@ -288,7 +289,106 @@ if (isShopping) playSound("cash-kaching.mp3");
       alert(e?.message || "저장 실패(콘솔 확인)");
     }
   };
+/* ===== START: OCR -> create shopping items (today only) ===== */
+const runOcrToShoppingToday = async () => {
+  try {
+    if (!user?.uid) {
+      alert("로그인이 필요해요!");
+      return;
+    }
 
+    const dateKey = todayKey; // ✅ 너 코드에 todayKey가 이미 있어야 함
+
+    // 1) shoppingMeta에서 OCR 결과 읽기
+    const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
+    const metaSnap = await getDoc(metaRef);
+
+    if (!metaSnap.exists()) {
+      alert("오늘 영수증 메타가 없어요. 먼저 Receipt로 사진을 올려줘!");
+      return;
+    }
+
+    const meta = metaSnap.data() || {};
+
+    if (meta.receiptOcrStatus !== "done") {
+      alert("OCR이 아직 완료되지 않았어. (status가 done이 아님)");
+      return;
+    }
+
+    // 이미 생성했으면 중복 방지
+    if (meta.receiptOcrAppliedAt) {
+      alert("이미 오늘 OCR 항목이 생성된 적이 있어. (중복 방지)");
+      return;
+    }
+
+    const raw = String(meta.receiptOcrRawText || "").trim();
+    if (!raw) {
+      alert("OCR 텍스트가 비어 있어. (receiptOcrRawText 없음)");
+      return;
+    }
+
+    // 2) 간단 파싱: '품목 ... 금액' 형태 라인 추출 (최대 20개)
+    const lines = raw
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    const picked = [];
+    for (const line of lines) {
+      const m = line.match(
+        /^(.{1,30}?)\s+([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{3,})\s*원?$/
+      );
+      if (!m) continue;
+
+      const name = String(m[1] || "").trim();
+      const priceNum = parseInt(String(m[2]).replace(/,/g, ""), 10);
+
+      if (!name) continue;
+      if (!Number.isFinite(priceNum) || priceNum <= 0) continue;
+
+      picked.push({ text: name, price: priceNum });
+      if (picked.length >= 20) break;
+    }
+
+    if (picked.length === 0) {
+      alert(
+        "자동으로 뽑을 만한 항목/가격 라인을 못 찾았어. (영수증 형식 때문일 수 있어)"
+      );
+      return;
+    }
+
+    // 3) Firestore todos에 생성
+    const todosRef = collection(db, "users", user.uid, "todos");
+
+    await Promise.all(
+      picked.map((it) =>
+        addDoc(todosRef, {
+          text: it.text,
+          completed: false,
+          date: dateKey,
+          kind: "shopping",
+          price: it.price,
+          createdAt: serverTimestamp(),
+          source: "ocr",
+        })
+      )
+    );
+
+    // 4) 중복 방지 마킹
+    await setDoc(
+      metaRef,
+      { receiptOcrAppliedAt: serverTimestamp() },
+      { merge: true }
+    );
+
+    alert(`OCR 항목 ${picked.length}개를 오늘 쇼핑에 추가했어!`);
+  } catch (e) {
+    console.error("runOcrToShoppingToday fail:", e);
+    alert(e?.message || "OCR 항목 생성 실패(콘솔 확인)");
+  }
+};
+/* ===== END: OCR -> create shopping items (today only) ===== */
+  
   // Todo 토글
   const toggleTodo = async (id, completed) => {
     if (!user) return;
@@ -426,121 +526,134 @@ if (isShopping) playSound("cash-kaching.mp3");
                 {todoMode === "shopping" ? "SHOPPING" : "TODO"}
               </h2>
 
-                                          <div className="todoTopRight">
+                                          {/* ===== START: todoTopRight (DETAIL-ONLY OCR before Receipt) ===== */}
+<div className="todoTopRight">
+  {/* ✅ OCR: 상세화면 + 쇼핑모드에서만, Receipt 앞 */}
+  {isDetailView && todoMode === "shopping" && (
+    <button
+      type="button"
+      className="todoAddBtn ocrBtn"
+      onClick={runOcrToShoppingToday}
+      title="영수증 OCR로 오늘 쇼핑 항목 생성"
+    >
+      OCR
+    </button>
+  )}
+
+  {/* ✅ Receipt: 쇼핑모드에서만 (전체/상세 공통) */}
   {todoMode === "shopping" && (
     <>
       <button
-  type="button"
-  className={`todoAddBtn receiptBtn ${shoppingImageUrl ? "hasReceipt" : ""}`}
-  title={
-    shoppingImageUrl
-      ? "클릭: 영수증 보기 / Shift+클릭: 교체 / Alt+클릭: 삭제"
-      : "영수증 업로드"
-  }
-  style={{
-    background: shoppingImageUrl ? "#ffd966" : "#fff1b8",
-    opacity: receiptUploading ? 0.7 : 1,
-  }}
-  disabled={receiptUploading}
-  onClick={async (e) => {
-    // ✅ Alt+클릭: 삭제 (UI 추가 없이)
-    if (e.altKey && shoppingImageUrl) {
-      if (!user) return;
-      try {
-        const dateKey = todayKey;
+        type="button"
+        className={`todoAddBtn receiptBtn ${shoppingImageUrl ? "hasReceipt" : ""}`}
+        title={
+          shoppingImageUrl
+            ? "클릭: 영수증 보기 / Shift+클릭: 교체 / Alt+클릭: 삭제"
+            : "영수증 업로드"
+        }
+        style={{
+          background: shoppingImageUrl ? "#ffd966" : "#fff1b8",
+          opacity: receiptUploading ? 0.7 : 1,
+        }}
+        disabled={receiptUploading}
+        onClick={async (e) => {
+          // ✅ Alt+클릭: 삭제 (UI 추가 없이)
+          if (e.altKey && shoppingImageUrl) {
+            if (!user) return;
+            try {
+              const dateKey = todayKey;
 
-        // storage 파일 삭제(경로가 있을 때만)
-        if (shoppingImagePath) {
-          try {
-            await deleteObject(storageRef(storage, shoppingImagePath));
-          } catch (err) {
-            console.warn("영수증 파일 삭제 실패(무시):", err);
+              // storage 파일 삭제(경로가 있을 때만)
+              if (shoppingImagePath) {
+                try {
+                  await deleteObject(storageRef(storage, shoppingImagePath));
+                } catch (err) {
+                  console.warn("영수증 파일 삭제 실패(무시):", err);
+                }
+              }
+
+              // meta 문서 삭제
+              await deleteDoc(doc(db, "users", user.uid, "shoppingMeta", dateKey));
+            } catch (err) {
+              console.error("영수증 삭제 실패:", err);
+              alert(err?.message || "영수증 삭제 실패(콘솔 확인)");
+            }
+            return;
           }
-        }
 
-        // meta 문서 삭제
-        await deleteDoc(doc(db, "users", user.uid, "shoppingMeta", dateKey));
-      } catch (err) {
-        console.error("영수증 삭제 실패:", err);
-        alert(err?.message || "영수증 삭제 실패(콘솔 확인)");
-      }
-      return;
-    }
+          // ✅ Shift+클릭: 교체 업로드
+          if (e.shiftKey) {
+            receiptInputRef.current?.click();
+            return;
+          }
 
-    // ✅ Shift+클릭: 교체 업로드
-    if (e.shiftKey) {
-      receiptInputRef.current?.click();
-      return;
-    }
+          // ✅ 기본 클릭: 있으면 보기 / 없으면 업로드
+          if (shoppingImageUrl) {
+            window.open(shoppingImageUrl, "_blank", "noopener,noreferrer");
+            return;
+          }
 
-    // ✅ 기본 클릭: 있으면 보기 / 없으면 업로드
-    if (shoppingImageUrl) {
-      window.open(shoppingImageUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
+          receiptInputRef.current?.click();
+        }}
+      >
+        Receipt
+      </button>
 
-    receiptInputRef.current?.click();
-  }}
->
-  Receipt
-</button>
+      <input
+        ref={receiptInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          // 같은 파일 다시 선택 가능하게 먼저 초기화
+          e.target.value = "";
+          if (!f) return;
 
-<input
-  ref={receiptInputRef}
-  type="file"
-  accept="image/*"
-  style={{ display: "none" }}
-  onChange={async (e) => {
-    const f = e.target.files?.[0];
-    // 같은 파일 다시 선택 가능하게 먼저 초기화
-    e.target.value = "";
-    if (!f) return;
+          if (!user) {
+            alert("로그인이 필요해요!");
+            return;
+          }
 
-    if (!user) {
-      alert("로그인이 필요해요!");
-      return;
-    }
+          setReceiptUploading(true);
 
-    setReceiptUploading(true);
+          try {
+            const dateKey = todayKey;
+            const ext = (f.name || "").split(".").pop() || "jpg";
+            const imagePath = `users/${user.uid}/shoppingReceipts/${dateKey}.${ext}`;
 
-    try {
-      const dateKey = todayKey;
-      const ext = (f.name || "").split(".").pop() || "jpg";
-      const imagePath = `users/${user.uid}/shoppingReceipts/${dateKey}.${ext}`;
+            // 기존 파일이 있으면 삭제 시도(실패해도 진행)
+            if (shoppingImagePath) {
+              try {
+                await deleteObject(storageRef(storage, shoppingImagePath));
+              } catch (err) {
+                console.warn("기존 영수증 삭제 실패(무시):", err);
+              }
+            }
 
-      // 기존 파일이 있으면 삭제 시도(실패해도 진행)
-      if (shoppingImagePath) {
-        try {
-          await deleteObject(storageRef(storage, shoppingImagePath));
-        } catch (err) {
-          console.warn("기존 영수증 삭제 실패(무시):", err);
-        }
-      }
+            // 업로드
+            const sRef = storageRef(storage, imagePath);
+            await uploadBytes(sRef, f);
+            const imageUrl = await getDownloadURL(sRef);
 
-      // 업로드
-      const sRef = storageRef(storage, imagePath);
-      await uploadBytes(sRef, f);
-      const imageUrl = await getDownloadURL(sRef);
+            // meta 저장(하루 1장)
+            const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
+            await setDoc(
+              metaRef,
+              { imageUrl, imagePath, updatedAt: serverTimestamp() },
+              { merge: true }
+            );
 
-      // meta 저장(하루 1장)
-      const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
-      await setDoc(
-        metaRef,
-        { imageUrl, imagePath, updatedAt: serverTimestamp() },
-        { merge: true }
-      );
-      // 🔊 영수증 업로드 성공 → 프린트
-playSound("receipt-print.mp3");
-      // ✅ 여기서 setShoppingImageUrl 직접 안 해도 됨:
-      // 위 onSnapshot이 저장 성공 후 값을 가져오면서 자동으로 진노랑/보기 됨.
-    } catch (err) {
-      console.error("영수증 업로드 실패:", err);
-      alert(err?.message || "영수증 업로드 실패(콘솔 확인)");
-    } finally {
-      setReceiptUploading(false);
-    }
-  }}
-/>
+            // 🔊 영수증 업로드 성공 → 프린트
+            playSound("receipt-print.mp3");
+          } catch (err) {
+            console.error("영수증 업로드 실패:", err);
+            alert(err?.message || "영수증 업로드 실패(콘솔 확인)");
+          } finally {
+            setReceiptUploading(false);
+          }
+        }}
+      />
     </>
   )}
 
@@ -548,6 +661,7 @@ playSound("receipt-print.mp3");
     + Add
   </button>
 </div>
+{/* ===== END: todoTopRight (DETAIL-ONLY OCR before Receipt) ===== */}
             </div>
 
             {/* ✅ 오늘 키 (기본 화면은 오늘 것만) */}
@@ -572,8 +686,10 @@ playSound("receipt-print.mp3");
                 .filter((d) => d !== "unknown")
                 .sort((a, b) => b.localeCompare(a));
 
-              const todayItems = byDate[todayKey] || [];
-              const historyDates = allDatesDesc.filter((d) => d !== todayKey);
+              // ===== START HISTORY DATES =====
+const todayItems = byDate[todayKey] || [];
+const historyDates = allDatesDesc; // ✅ 오늘도 포함
+// ===== END HISTORY DATES =====
 
               return (
                 <>
@@ -646,8 +762,10 @@ playSound("receipt-print.mp3");
       value={price}
       onChange={(e) => setPrice(e.target.value)}
     />
-
+    {todoMode === "shopping" && (
+<>
     {/* ✅ 기본 화면: 오늘 것만 */}
+    
     <ul>
       {todayItems.map((item) => (
         <li key={item.id} className="todo-item">
@@ -674,19 +792,22 @@ playSound("receipt-print.mp3");
         .toLocaleString()}
       원
     </div>
-
+       </>
+)} 
     {/* ✅ 상세 패널: 날짜 아코디언 */}
-    {isDetailView && (
-      <HistoryPanel
-        mode="shopping"
-        dates={historyDates}
-        byDate={byDate}
-        defaultOpenCount={4}
-        onToggleTodo={toggleTodo}
-        onDelete={deleteTodoItem}
-        user={user}
-      />
-    )}
+    {/* ===== START: DETAIL-ONLY HistoryPanel (shopping) ===== */}
+{isDetailView && (
+  <HistoryPanel
+    mode="shopping"
+    dates={historyDates}
+    byDate={byDate}
+    defaultOpenCount={4}
+    onToggleTodo={toggleTodo}
+    onDelete={deleteTodoItem}
+    user={user}
+  />
+)}
+{/* ===== END: DETAIL-ONLY HistoryPanel (shopping) ===== */}
   </>
 )}
                 </>

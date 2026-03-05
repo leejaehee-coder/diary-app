@@ -760,3 +760,14 @@ textarea{
   color: #222;
   border-color: #f4c430;
 }
+
+/* ===== START: OCR 버튼 색 (더 연한 민트) ===== */
+.ocrBtn {
+  background: #e9fbf6;   /* 더 연한 민트 */
+  border-color: #d2f5ec;
+}
+
+.ocrBtn:hover {
+  background: #dcf8f1;
+}
+/* ===== END: OCR 버튼 색 ===== */
