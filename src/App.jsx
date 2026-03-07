@@ -20,6 +20,13 @@ import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "fi
 
 function App() {
   const [user, setUser] = useState(null);
+const getLocalDateKey = (d = new Date()) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
     // 🔊 공통 사운드 재생 함수
   const playSound = (fileName) => {
     try {
@@ -31,6 +38,15 @@ function App() {
     }
   };
   const [date, setDate] = useState("");
+  /* ===== START: set today's date automatically ===== */
+useEffect(() => {
+  const today = getLocalDateKey();
+  setDate(today);
+}, []);
+/* ===== END: set today's date automatically ===== */
+/* ===== START: safe current date key ===== */
+const dateKey = date || getLocalDateKey();
+/* ===== END: safe current date key ===== */
   const [time, setTime] = useState("");
   const [text, setText] = useState("");
   const [entryPhotoFile, setEntryPhotoFile] = useState(null);
@@ -41,8 +57,14 @@ function App() {
   const [todoText, setTodoText] = useState("");
   const [price, setPrice] = useState("");
   const [todos, setTodos] = useState([]);
+  /* ===== START: clear list when date changes ===== */
+useEffect(() => {
+  setTodos([]);
+}, [date]);
+/* ===== END: clear list when date changes ===== */
   const [shoppingImageUrl, setShoppingImageUrl] = useState("");
   const [shoppingImagePath, setShoppingImagePath] = useState("");
+  const [shoppingMetaMap, setShoppingMetaMap] = useState({});
 const [receiptUploading, setReceiptUploading] = useState(false);
 const receiptInputRef = useRef(null);
   // ✅ 보기 모드: all | diary | todo
@@ -60,22 +82,61 @@ const clearEntrySearch = () => {
   setEntrySearch("");
   setEntrySearchApplied("");
 };
-
+// 🔍 TODO / SHOPPING 검색
+const [showSearch, setShowSearch] = useState(false);
+const [todoSearch, setTodoSearch] = useState("");
   // ✅ TODO 섹션 내부 모드: todo | shopping
   const [todoMode, setTodoMode] = useState("todo");
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = getLocalDateKey();
   const nowHHMM = new Date().toTimeString().slice(0, 5);
   const isDetailView = viewMode === "todo" || viewMode === "shopping";
+  const parseDateKey = (dateKey) => {
+  const [y, m, d] = String(dateKey || "")
+    .split("-")
+    .map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+};
 
-  // ✅ (추가) 전체화면 상단 표시: 월.일.요일
-  const nowMDW = new Date()
-    .toLocaleDateString("ko-KR", {
-      month: "numeric",
-      day: "numeric",
-      weekday: "short",
-    })
-    .replaceAll(" ", "."); // 예: "2.22.일"
+const shoppingTodos = todos.filter(
+  (t) => (t.kind || "todo") === "shopping"
+);
 
+const todayBase = new Date();
+todayBase.setHours(0, 0, 0, 0);
+
+const todayDay = todayBase.getDay();
+const mondayOffset = todayDay === 0 ? -6 : 1 - todayDay;
+
+const thisWeekStart = new Date(todayBase);
+thisWeekStart.setDate(todayBase.getDate() + mondayOffset);
+thisWeekStart.setHours(0, 0, 0, 0);
+
+const thisWeekEnd = new Date(thisWeekStart);
+thisWeekEnd.setDate(thisWeekStart.getDate() + 6);
+thisWeekEnd.setHours(23, 59, 59, 999);
+
+const weeklyTotal = shoppingTodos.reduce((sum, t) => {
+  const amount = Number(t.price || 0);
+  if (!amount) return sum;
+
+  const d = parseDateKey(t.date);
+  d.setHours(0, 0, 0, 0);
+
+  return d >= thisWeekStart && d <= thisWeekEnd ? sum + amount : sum;
+}, 0);
+
+const monthlyTotal = shoppingTodos.reduce((sum, t) => {
+  const amount = Number(t.price || 0);
+  if (!amount) return sum;
+
+  const d = parseDateKey(t.date);
+
+  return d.getFullYear() === todayBase.getFullYear() &&
+    d.getMonth() === todayBase.getMonth()
+    ? sum + amount
+    : sum;
+}, 0);
+  
   // 로그인 상태 감지
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u));
@@ -85,7 +146,7 @@ const clearEntrySearch = () => {
   // 날짜 자동
   useEffect(() => {
     const now = new Date();
-    setDate(now.toISOString().slice(0, 10));
+    setDate(getLocalDateKey(now));
     setTime(now.toTimeString().slice(0, 5));
   }, []);
 
@@ -115,7 +176,11 @@ const clearEntrySearch = () => {
     }
 
     const ref = collection(db, "users", user.uid, "todos");
-    const q = query(ref, orderBy("createdAt", "desc"));
+    const q = query(
+  ref,
+  orderBy("createdAt", "desc")
+
+);
 
     const unsub = onSnapshot(q, (snap) => {
       const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -123,7 +188,25 @@ const clearEntrySearch = () => {
     });
 
     return () => unsub();
-  }, [user]);
+  }, [user, date]);
+  useEffect(() => {
+  if (!user) {
+    setShoppingMetaMap({});
+    return;
+  }
+
+  const ref = collection(db, "users", user.uid, "shoppingMeta");
+
+  const unsub = onSnapshot(ref, (snap) => {
+    const map = {};
+    snap.docs.forEach((d) => {
+      map[d.id] = d.data() || {};
+    });
+    setShoppingMetaMap(map);
+  });
+
+  return () => unsub();
+}, [user]);
   // ✅ (추가) 오늘 영수증 meta realtime (저장 성공 후 버튼 진노랑/보기 가능)
 useEffect(() => {
   if (!user) {
@@ -245,33 +328,31 @@ const handleReceiptClick = () => {
 };
   // Todo 추가
   const addTodo = async () => {
-    try {
-      if (!user) {
-        alert("로그인이 필요해요!");
-        return;
-      }
+  try {
+    if (!user) {
+      alert("로그인이 필요해요!");
+      return;
+    }
 
-      const t = (todoText || "").trim();
-      if (!t) {
-        alert("내용을 입력해줘!");
-        return;
-      }
+    const t = (todoText || "").trim();
+    if (!t) {
+      alert("내용을 입력해줘!");
+      return;
+    }
 
-      const dateKey = new Date().toISOString().slice(0, 10);
+    const ref = collection(db, "users", user.uid, "todos");
 
-      const ref = collection(db, "users", user.uid, "todos");
+    const isShopping = todoMode === "shopping";
+    const priceNum = isShopping ? Number(price || 0) : 0;
 
-      const isShopping = todoMode === "shopping";
-      const priceNum = isShopping ? Number(price || 0) : 0;
-
-      await addDoc(ref, {
-        text: t,
-        completed: false,
-        date: dateKey,
-        kind: isShopping ? "shopping" : "todo",
-        price: priceNum,
-        createdAt: serverTimestamp(),
-      });
+    await addDoc(ref, {
+      text: t,
+      completed: false,
+      date: dateKey,
+      kind: isShopping ? "shopping" : "todo",
+      price: priceNum,
+      createdAt: serverTimestamp(),
+    });
 
       // ✅ 성공 표시(이제 "안 먹힘"인지 확실히 알 수 있음)
       console.log("ADD OK:", {
@@ -291,100 +372,69 @@ if (isShopping) playSound("cash-kaching.mp3");
   };
 /* ===== START: OCR -> create shopping items (today only) ===== */
 const runOcrToShoppingToday = async () => {
+  if (!user) {
+    alert("로그인이 필요해요.");
+    return;
+  }
+
   try {
-    if (!user?.uid) {
-      alert("로그인이 필요해요!");
-      return;
-    }
+    const dateKey = todayKey;
 
-    const dateKey = todayKey; // ✅ 너 코드에 todayKey가 이미 있어야 함
-
-    // 1) shoppingMeta에서 OCR 결과 읽기
     const metaRef = doc(db, "users", user.uid, "shoppingMeta", dateKey);
     const metaSnap = await getDoc(metaRef);
 
     if (!metaSnap.exists()) {
-      alert("오늘 영수증 메타가 없어요. 먼저 Receipt로 사진을 올려줘!");
+      alert("OCR 데이터가 없습니다.");
       return;
     }
 
-    const meta = metaSnap.data() || {};
+    const raw = metaSnap.data().receiptOcrRawText || "";
 
-    if (meta.receiptOcrStatus !== "done") {
-      alert("OCR이 아직 완료되지 않았어. (status가 done이 아님)");
+    if (!raw.trim()) {
+      alert("OCR 텍스트가 비어 있습니다.");
       return;
     }
 
-    // 이미 생성했으면 중복 방지
-    if (meta.receiptOcrAppliedAt) {
-      alert("이미 오늘 OCR 항목이 생성된 적이 있어. (중복 방지)");
-      return;
-    }
-
-    const raw = String(meta.receiptOcrRawText || "").trim();
-    if (!raw) {
-      alert("OCR 텍스트가 비어 있어. (receiptOcrRawText 없음)");
-      return;
-    }
-
-    // 2) 간단 파싱: '품목 ... 금액' 형태 라인 추출 (최대 20개)
     const lines = raw
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean);
 
-    const picked = [];
-    for (const line of lines) {
-      const m = line.match(
-        /^(.{1,30}?)\s+([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{3,})\s*원?$/
-      );
-      if (!m) continue;
-
-      const name = String(m[1] || "").trim();
-      const priceNum = parseInt(String(m[2]).replace(/,/g, ""), 10);
-
-      if (!name) continue;
-      if (!Number.isFinite(priceNum) || priceNum <= 0) continue;
-
-      picked.push({ text: name, price: priceNum });
-      if (picked.length >= 20) break;
-    }
-
-    if (picked.length === 0) {
-      alert(
-        "자동으로 뽑을 만한 항목/가격 라인을 못 찾았어. (영수증 형식 때문일 수 있어)"
-      );
-      return;
-    }
-
-    // 3) Firestore todos에 생성
     const todosRef = collection(db, "users", user.uid, "todos");
 
-    await Promise.all(
-      picked.map((it) =>
-        addDoc(todosRef, {
-          text: it.text,
-          completed: false,
-          date: dateKey,
-          kind: "shopping",
-          price: it.price,
-          createdAt: serverTimestamp(),
-          source: "ocr",
-        })
-      )
-    );
+    let created = 0;
 
-    // 4) 중복 방지 마킹
-    await setDoc(
-      metaRef,
-      { receiptOcrAppliedAt: serverTimestamp() },
-      { merge: true }
-    );
+    for (const line of lines) {
+      const m = line.match(/(.+?)\s*([0-9]{3,}(?:,[0-9]{3})*)$/);
 
-    alert(`OCR 항목 ${picked.length}개를 오늘 쇼핑에 추가했어!`);
-  } catch (e) {
-    console.error("runOcrToShoppingToday fail:", e);
-    alert(e?.message || "OCR 항목 생성 실패(콘솔 확인)");
+      if (!m) continue;
+
+      const name = m[1].trim();
+      const price = parseInt(m[2].replace(/,/g, ""), 10);
+
+      if (!name || !price) continue;
+
+      await addDoc(todosRef, {
+        text: name,
+        completed: false,
+        date: dateKey,
+        kind: "shopping",
+        price: price,
+        createdAt: serverTimestamp(),
+        source: "ocr",
+      });
+
+      created++;
+    }
+
+    if (created === 0) {
+      alert("상품을 찾지 못했습니다.");
+    } else {
+      alert(`${created}개 쇼핑 항목이 추가되었습니다.`);
+    }
+  } catch (err) {
+    console.error("OCR → shopping list 실패:", err);
+    alert("OCR 처리 중 오류가 발생했습니다.");
   }
 };
 /* ===== END: OCR -> create shopping items (today only) ===== */
@@ -517,28 +567,44 @@ const runOcrToShoppingToday = async () => {
         {viewMode !== "diary" && (
           <div className="todo-section">
             <div className="todoTop">
+              
               <h2
-                style={{ cursor: "pointer" }}
-                onClick={() =>
-                  setTodoMode((m) => (m === "todo" ? "shopping" : "todo"))
-                }
-              >
-                {todoMode === "shopping" ? "SHOPPING" : "TODO"}
-              </h2>
+  style={{ cursor: "pointer" }}
+  onClick={() =>
+    setTodoMode((m) => (m === "todo" ? "shopping" : "todo"))
+  }
+>
+  {todoMode === "shopping" ? "SHOPPING" : "TODO"}
+</h2>
+
+{isDetailView && showSearch && (
+  <input
+    className="todoSearchInput"
+    placeholder="검색..."
+    value={todoSearch}
+    onChange={(e) => setTodoSearch(e.target.value)}
+  />
+)}
 
                                           {/* ===== START: todoTopRight (DETAIL-ONLY OCR before Receipt) ===== */}
 <div className="todoTopRight">
   {/* ✅ OCR: 상세화면 + 쇼핑모드에서만, Receipt 앞 */}
-  {isDetailView && todoMode === "shopping" && (
-    <button
-      type="button"
-      className="todoAddBtn ocrBtn"
-      onClick={runOcrToShoppingToday}
-      title="영수증 OCR로 오늘 쇼핑 항목 생성"
-    >
-      OCR
-    </button>
-  )}
+  {isDetailView && (
+  <button
+  type="button"
+  className="todoAddBtn ocrBtn"
+  onClick={() => {
+  setShowSearch((v) => {
+    const next = !v;
+    if (!next) setTodoSearch("");
+    return next;
+  });
+}}
+  title="검색"
+>
+  🔍
+</button>
+)}
 
   {/* ✅ Receipt: 쇼핑모드에서만 (전체/상세 공통) */}
   {todoMode === "shopping" && (
@@ -666,7 +732,7 @@ const runOcrToShoppingToday = async () => {
 
             {/* ✅ 오늘 키 (기본 화면은 오늘 것만) */}
             {(() => {
-              const todayKey = new Date().toISOString().slice(0, 10);
+              const todayKey = getLocalDateKey();
               const activeKind = todoMode === "shopping" ? "shopping" : "todo";
 
               const kindTodos = todos.filter(
@@ -689,6 +755,12 @@ const runOcrToShoppingToday = async () => {
               // ===== START HISTORY DATES =====
 const todayItems = byDate[todayKey] || [];
 const historyDates = allDatesDesc; // ✅ 오늘도 포함
+const filteredTodayItems = todayItems.filter((item) =>
+  String(item?.text || "")
+    .toLowerCase()
+    .includes(String(todoSearch || "").toLowerCase())
+);
+
 // ===== END HISTORY DATES =====
 
               return (
@@ -707,8 +779,10 @@ const historyDates = allDatesDesc; // ✅ 오늘도 포함
     />
 
     {/* ✅ 기본 화면: 오늘 것만 */}
-    <ul>
-      {todayItems.map((todo) => (
+  
+      {viewMode === "all" && (
+<ul>
+  {filteredTodayItems.map((todo) => (
         <li
           key={todo.id}
           className={`todo-item ${todo.completed ? "completed" : ""}`}
@@ -727,7 +801,7 @@ const historyDates = allDatesDesc; // ✅ 오늘도 포함
         </li>
       ))}
     </ul>
-
+)}
     {/* ✅ 상세 패널: 날짜 아코디언 */}
     {isDetailView && (
       <HistoryPanel
@@ -738,6 +812,8 @@ const historyDates = allDatesDesc; // ✅ 오늘도 포함
         onToggleTodo={toggleTodo}
         onDelete={deleteTodoItem}
         user={user}
+        todayKey={todayKey}
+        searchText={todoSearch}
       />
     )}
   </>
@@ -766,8 +842,9 @@ const historyDates = allDatesDesc; // ✅ 오늘도 포함
 <>
     {/* ✅ 기본 화면: 오늘 것만 */}
     
-    <ul>
-      {todayItems.map((item) => (
+      {viewMode === "all" && (
+<ul>
+  {filteredTodayItems.map((item) => (
         <li key={item.id} className="todo-item">
           <span className="todoText">
             <span className="todoTextInner">{item.text}</span>
@@ -783,7 +860,7 @@ const historyDates = allDatesDesc; // ✅ 오늘도 포함
         </li>
       ))}
     </ul>
-
+    )}
     {/* ✅ 오늘 총합만 */}
     <div className="todayTotal">
       총합:{" "}
@@ -792,6 +869,20 @@ const historyDates = allDatesDesc; // ✅ 오늘도 포함
         .toLocaleString()}
       원
     </div>
+
+    <div className="receiptSummaryBox">
+  <div className="receiptSummaryRow">
+    <span className="receiptSummaryLabel">💗 Weekly Total</span>
+    <span className="receiptSummaryColon">:</span>
+    <span className="receiptSummaryValue">{weeklyTotal.toLocaleString()}원</span>
+  </div>
+
+  <div className="receiptSummaryRow">
+    <span className="receiptSummaryLabel">💗 Monthly Total</span>
+    <span className="receiptSummaryColon">:</span>
+    <span className="receiptSummaryValue">{monthlyTotal.toLocaleString()}원</span>
+  </div>
+</div>
        </>
 )} 
     {/* ✅ 상세 패널: 날짜 아코디언 */}
@@ -805,6 +896,8 @@ const historyDates = allDatesDesc; // ✅ 오늘도 포함
     onToggleTodo={toggleTodo}
     onDelete={deleteTodoItem}
     user={user}
+    todayKey={todayKey}
+    searchText={todoSearch}
   />
 )}
 {/* ===== END: DETAIL-ONLY HistoryPanel (shopping) ===== */}
@@ -1262,6 +1355,8 @@ function HistoryPanel({
   onToggleTodo,
   onDelete,
   user,
+  todayKey,
+  searchText,
 }) {
   const [open, setOpen] = useState(null);
 
@@ -1457,14 +1552,38 @@ function HistoryPanel({
   }, [mode, defaultOpenCount]);
 
   useEffect(() => {
-    if (open !== null) return;
+  if (open !== null) return;
 
-    const init = {};
-    dates.slice(0, defaultOpenCount).forEach((d) => {
-      init[d] = true;
+  const init = {};
+  dates.forEach((d) => {
+    init[d] = d === todayKey;
+  });
+
+  setOpen(init);
+}, [open, dates, todayKey]);
+useEffect(() => {
+  const next = {};
+
+  if (!searchText) {
+    dates.forEach((d) => {
+      next[d] = d === todayKey;
     });
-    setOpen(init);
-  }, [open, dates, defaultOpenCount]);
+    setOpen(next);
+    return;
+  }
+
+  dates.forEach((d) => {
+    const items = byDate[d] || [];
+    const hasMatch = items.some((it) =>
+      String(it?.text || "")
+        .toLowerCase()
+        .includes(String(searchText || "").toLowerCase())
+    );
+    next[d] = hasMatch;
+  });
+
+  setOpen(next);
+}, [searchText, dates, byDate, todayKey]);
 
   // ✅ (추가) shopping 모드에서, "열린 날짜"의 shoppingMeta를 실시간 구독
   useEffect(() => {
@@ -1551,6 +1670,11 @@ function HistoryPanel({
         {dates.map((d) => {
           const isOpen = !!open?.[d];
           const items = byDate[d] || [];
+          const filteredItems = items.filter((it) =>
+  String(it?.text || "")
+    .toLowerCase()
+    .includes(String(searchText || "").toLowerCase())
+);
           const dayTotal = items.reduce(
             (sum, it) => sum + Number(it.price || 0),
             0
@@ -1695,96 +1819,84 @@ function HistoryPanel({
                     }
                   >
                     <div className="historyLeft">
-                                            <ul className="historyUl">
-                        {items.map((it) => {
-                          const dayEditOn = !!editDay?.[d];
-                          const draft = draftById?.[it.id] || {};
+  <ul className="historyUl">
+    {filteredItems.map((it) => {
+      const dayEditOn = !!editDay?.[d];
+      const draft = draftById?.[it.id] || {};
 
-                          const textVal =
-                            draft.text !== undefined ? draft.text : it.text || "";
+      const textVal =
+        draft.text !== undefined ? draft.text : it.text || "";
 
-                          const priceVal =
-                            draft.price !== undefined
-                              ? draft.price
-                              : String(it.price ?? "");
+      const priceVal =
+        draft.price !== undefined
+          ? draft.price
+          : String(it.price ?? "");
 
-                          return (
-                            <li
-                              key={it.id}
-                              className={`todo-item ${
-                                mode === "todo" && it.completed
-                                  ? "completed"
-                                  : ""
-                              }`}
-                            >
-                              {mode === "todo" && (
-                                <input
-                                  type="checkbox"
-                                  checked={!!it.completed}
-                                  onChange={() =>
-                                    onToggleTodo?.(it.id, !!it.completed)
-                                  }
-                                />
-                              )}
+      return (
+        <li
+          key={it.id}
+          className={`todo-item ${
+            mode === "todo" && it.completed ? "completed" : ""
+          }`}
+        >
+          {mode === "todo" && (
+            <input
+              type="checkbox"
+              checked={!!it.completed}
+              onChange={() => onToggleTodo?.(it.id, !!it.completed)}
+            />
+          )}
 
-                              {/* ✅ 텍스트: 편집모드면 input, 아니면 기존 표시 */}
-                              <span className="todoText">
-                                {dayEditOn ? (
-                                  <input
-                                    type="text"
-                                    value={textVal}
-                                    onChange={(e) =>
-                                      setDraft(it.id, { text: e.target.value })
-                                    }
-                                    style={{
-                                      width: "100%",
-                                      background: "transparent",
-                                      border: "1px solid rgba(0,0,0,0.18)",
-                                      borderRadius: "10px",
-                                      padding: "6px 8px",
-                                    }}
-                                  />
-                                ) : (
-                                  <span className="todoTextInner">{it.text}</span>
-                                )}
-                              </span>
+          <span className="todoText">
+            {dayEditOn ? (
+              <input
+                type="text"
+                value={textVal}
+                onChange={(e) =>
+                  setDraft(it.id, { text: e.target.value })
+                }
+                style={{
+                  width: "100%",
+                  background: "transparent",
+                  border: "1px solid rgba(0,0,0,0.18)",
+                  borderRadius: "10px",
+                  padding: "6px 8px",
+                }}
+              />
+            ) : (
+              <span className="todoTextInner">{it.text}</span>
+            )}
+          </span>
 
-                              {/* ✅ 가격: shopping일 때만. 편집모드면 input, 아니면 기존 priceTag */}
-                              {mode === "shopping" &&
-                                (dayEditOn ? (
-                                  <input
-                                    type="number"
-                                    value={priceVal}
-                                    onChange={(e) =>
-                                      setDraft(it.id, { price: e.target.value })
-                                    }
-                                    style={{
-                                      width: "92px",
-                                      background: "transparent",
-                                      border: "1px solid rgba(0,0,0,0.18)",
-                                      borderRadius: "10px",
-                                      padding: "6px 8px",
-                                      textAlign: "right",
-                                    }}
-                                  />
-                                ) : Number(it.price || 0) > 0 ? (
-                                  <span className="priceTag">
-                                    {Number(it.price || 0).toLocaleString()}원
-                                  </span>
-                                ) : null)}
+          {mode === "shopping" &&
+            (dayEditOn ? (
+              <input
+                type="number"
+                value={priceVal}
+                onChange={(e) =>
+                  setDraft(it.id, { price: e.target.value })
+                }
+                style={{
+                  width: "92px",
+                  background: "transparent",
+                  border: "1px solid rgba(0,0,0,0.18)",
+                  borderRadius: "10px",
+                  padding: "6px 8px",
+                  textAlign: "right",
+                }}
+              />
+            ) : Number(it.price || 0) > 0 ? (
+              <span className="priceTag">
+                {Number(it.price || 0).toLocaleString()}원
+              </span>
+            ) : null)}
 
-                              {/* ✅ 편집모드면 ✓ 저장 버튼 노출 (항목 1개 저장) */}
-                              
-
-                              {/* 기존 삭제는 그대로 */}
-                              <button onClick={() => onDelete?.(it.id)}>
-                                삭제
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
+          <button onClick={() => onDelete?.(it.id)}>삭제</button>
+        </li>
+      );
+    })}
+  </ul>
+</div>
 
                     {mode === "shopping" && (
                       <div className="historyRight">
